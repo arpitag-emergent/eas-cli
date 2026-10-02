@@ -1,4 +1,4 @@
-import { SystemError, UserError } from '@expo/eas-build-job';
+import { BuildPhaseResult, SystemError, UserError } from '@expo/eas-build-job';
 import type { bunyan } from '@expo/logger';
 import { BuildRuntimePlatform, type BuildStepEnv } from '@expo/steps';
 import { randomBytes } from 'node:crypto';
@@ -40,7 +40,7 @@ import {
   SERVE_SIM_STOP_GRACE_PERIOD_MS,
 } from './IosSimulatorRecordingUtils';
 import { SERVE_SIM_STATE_DIR, readServeSimServersAsync } from './serveSimMetricsRecorder';
-import { createServeSimServerLogAsync } from './serveSimServerLogs';
+import { startLogPhase } from '../../utils/logPhase';
 
 const WEB_PREVIEW_HOST = '127.0.0.1';
 const SERVE_SIM_PACKAGE_NAME = '@expo/serve-sim';
@@ -269,7 +269,38 @@ type AndroidSessionRecording = {
   env: BuildStepEnv;
 };
 
+type DeviceSessionHostOptions = {
+  runtimePlatform: BuildRuntimePlatform;
+  env: BuildStepEnv;
+  logger: bunyan;
+  timeoutMs: number;
+  packageVersion?: string;
+  networkCapture?: boolean;
+  networkCaptureFields?: string[];
+} & ServeSimLaunchOptions;
+
 export async function startDeviceSessionHostAsync(
+  ctx: CustomBuildContext,
+  options: DeviceSessionHostOptions
+): Promise<DeviceSessionHost> {
+  const phase = startLogPhase(options.logger, 'Simulator preview');
+  let ready = false;
+  try {
+    const host = await startDeviceSessionHostInPhaseAsync(
+      ctx,
+      { ...options, logger: phase.logger },
+      successful =>
+        phase.end(ready && successful ? BuildPhaseResult.SUCCESS : BuildPhaseResult.FAIL)
+    );
+    ready = true;
+    return host;
+  } catch (error) {
+    phase.end(BuildPhaseResult.FAIL);
+    throw error;
+  }
+}
+
+async function startDeviceSessionHostInPhaseAsync(
   ctx: CustomBuildContext,
   {
     runtimePlatform,
@@ -282,15 +313,8 @@ export async function startDeviceSessionHostAsync(
     openUrl,
     networkCapture = false,
     networkCaptureFields = [],
-  }: {
-    runtimePlatform: BuildRuntimePlatform;
-    env: BuildStepEnv;
-    logger: bunyan;
-    timeoutMs: number;
-    packageVersion?: string;
-    networkCapture?: boolean;
-    networkCaptureFields?: string[];
-  } & ServeSimLaunchOptions
+  }: DeviceSessionHostOptions,
+  onFinished: (successful: boolean) => void
 ): Promise<DeviceSessionHost> {
   const isAndroid = runtimePlatform === BuildRuntimePlatform.LINUX;
   // Unreachable from the step functions, which reject a non-Darwin launch while parsing.
@@ -351,19 +375,10 @@ export async function startDeviceSessionHostAsync(
   logger.info(
     `Launching ${packageSpec} on ${WEB_PREVIEW_HOST}:${port} via ${previewExec.command}.`
   );
-  const serverLog =
-    !isAndroid && env.DEVICE_RUN_SESSION_ID
-      ? await createServeSimServerLogAsync(
-          env.DEVICE_RUN_SESSION_ID,
-          turnArgs.filter((_, index) => turnArgs[index - 1] === '--turn-credential')
-        ).catch(err => {
-          logger.warn({ err }, 'Could not create the serve-sim log file.');
-          return undefined;
-        })
-      : undefined;
-  if (serverLog) {
-    logger.info(`Saving serve-sim stdout and stderr to ${serverLog.filePath}.`);
-  }
+  const secrets = [
+    ...turnArgs.filter((_, index) => turnArgs[index - 1] === '--turn-credential'),
+    ...(recording ? [recording.controlToken] : []),
+  ];
   const screenshots = await startDeviceRunSessionScreenshotsAsync(ctx, {
     deviceRunSessionId: getDeviceRunSessionIdOrThrow(env),
     logger,
@@ -382,7 +397,8 @@ export async function startDeviceSessionHostAsync(
       stopGracePeriodMs: recording
         ? RECORDING_STOP_GRACE_PERIOD_MS
         : SERVE_SIM_STOP_GRACE_PERIOD_MS,
-      outputLog: serverLog?.output,
+      logger,
+      secrets,
     });
   } catch (error) {
     // Nothing was spawned, so nothing can still write into the directory.
@@ -394,6 +410,7 @@ export async function startDeviceSessionHostAsync(
   let previewTask: Promise<DeviceWebPreview> | null = null;
   let finishTask: Promise<void> | null = null;
   let hostReady = false;
+  let previewFailed = false;
 
   const host: DeviceSessionHost = {
     openPreviewAsync({ baseDomain }) {
@@ -422,6 +439,7 @@ export async function startDeviceSessionHostAsync(
           throw new SystemError('Session host finalized while the preview was opening.');
         }
         let closeTask: Promise<void> | null = null;
+        previewFailed = false;
         return {
           previewPageUrl,
           apiUrl: tunnel.url,
@@ -442,6 +460,7 @@ export async function startDeviceSessionHostAsync(
       previewTask = opening;
       // A failed tunnel may be retried without restarting capture.
       void opening.catch(() => {
+        previewFailed = true;
         if (previewTask === opening) {
           previewTask = null;
         }
@@ -458,7 +477,13 @@ export async function startDeviceSessionHostAsync(
         // A host that never answered /readyz has nothing to finalize or upload.
         recording: hostReady ? recording : null,
         logger,
-      }));
+      }).then(
+        successful => onFinished(successful && !previewFailed),
+        err => {
+          logger.warn({ err }, 'Could not finish the simulator preview.');
+          onFinished(false);
+        }
+      ));
     },
   };
   try {
@@ -473,7 +498,7 @@ export async function startDeviceSessionHostAsync(
     if (!isAndroid) {
       previewToken = await readServeSimPreviewTokenAsync(device);
       if (previewToken) {
-        serverLog?.secrets.push(previewToken);
+        secrets.push(previewToken);
       }
       if (!previewToken) {
         throw new SystemError(
@@ -511,7 +536,8 @@ async function finishDeviceSessionHostAsync(
     recording: AndroidSessionRecording | null;
     logger: bunyan;
   }
-): Promise<void> {
+): Promise<boolean> {
+  const hostExited = previewServer.getExitError() !== undefined;
   // Native ngrok operations have no scoped cancellation. Retire a late listener too.
   const retirePreview = withDeviceRunSessionTimeoutAsync(
     { name: 'Preview tunnel retirement', timeoutMs: 5_000 },
@@ -558,6 +584,7 @@ async function finishDeviceSessionHostAsync(
       'Session host output around the recording failure.'
     );
   }
+  return hostStopped && !hostExited;
 }
 
 type AndroidRecordingFinalization = 'finalized' | 'not-recording' | 'failed';

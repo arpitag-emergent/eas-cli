@@ -59,7 +59,6 @@ import { createStartServeSimLogsBuildFunction } from './functions/startServeSimL
 import { createCollectServeSimLogsBuildFunction } from './functions/collectServeSimLogs';
 import { createStartSandboxBuildFunction } from './functions/startSandbox';
 import { createCollectServeSimMetricsBuildFunction } from './functions/collectServeSimMetrics';
-import { createCollectServeSimServerLogsBuildFunction } from './functions/collectServeSimServerLogs';
 import { createUploadArtifactBuildFunction } from './functions/uploadArtifact';
 import { createUploadDeviceRunSessionScreenRecordingsBuildFunction } from './functions/uploadDeviceRunSessionScreenRecordings';
 import { createUploadToAscBuildFunction } from './functions/uploadToAsc';
@@ -120,7 +119,6 @@ export function getEasFunctions(ctx: CustomBuildContext): BuildFunction[] {
     createCollectServeSimLogsBuildFunction(ctx),
     createStartSandboxBuildFunction(ctx),
     createCollectServeSimMetricsBuildFunction(ctx),
-    createCollectServeSimServerLogsBuildFunction(ctx),
     createInstallMaestroBuildFunction(),
     createInstallMitmproxyBuildFunction(),
 
