@@ -29,6 +29,8 @@ import { Sentry } from '../../sentry';
 import { isProcessGroupRunning } from '../../utils/processes';
 import { sleepAsync } from '../../utils/retry';
 import { turtleFetch } from '../../utils/turtleFetch';
+import { type CircularFile } from './circularFile';
+import { withDeviceRunSessionTimeoutAsync } from './deviceRunSessionTimeout';
 
 const XCODE_DEVELOPER_DIR = '/Applications/Xcode.app/Contents/Developer';
 
@@ -547,7 +549,8 @@ export function isProcessRunning(pid: number): boolean {
 
 async function stopDetachedProcessAsync(
   pid: number | undefined,
-  gracePeriodMs = 5_000
+  gracePeriodMs = 5_000,
+  waitForProcessGroup = false
 ): Promise<void> {
   if (pid === undefined || !isProcessGroupRunning(pid)) {
     return;
@@ -623,24 +626,28 @@ export function spawnDetached({
   cwd,
   env,
   stopGracePeriodMs,
+  outputLog,
 }: {
   command: string;
   args: string[];
   cwd?: string;
   env: BuildStepEnv;
   stopGracePeriodMs?: number;
+  outputLog?: CircularFile;
 }): DetachedProcessHandle {
   const promise = spawn(command, args, {
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
+    ignoreStdio: outputLog !== undefined,
   });
+  const outputDrained = outputLog
+    ? new Promise<void>(resolve => promise.child.once('close', () => resolve()))
+    : undefined;
   // Observe completion without rejecting in the background. Startup callers can
   // distinguish a dead process from one that is still preparing its state file.
   let exitError: Error | undefined;
-  // The spawn promise waits for stdio to close. Descendants may keep those
-  // pipes open after the launcher exits, so observe the exit itself as well.
   promise.child.once('exit', (code, signal) => {
     exitError = new Error(
       signal ? `Process exited with signal ${signal}.` : `Process exited with code ${code}.`
@@ -657,8 +664,17 @@ export function spawnDetached({
   promise.child.unref();
 
   let output = '';
+  let outputError: Error | undefined;
   const appendChunk = (chunk: Buffer | string): void => {
-    output += chunk.toString();
+    if (!outputLog) {
+      output += chunk.toString();
+    } else if (!outputError) {
+      try {
+        outputLog.append(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      } catch (err) {
+        outputError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
   };
   promise.child.stdout?.on('data', appendChunk);
   promise.child.stderr?.on('data', appendChunk);
@@ -666,9 +682,35 @@ export function spawnDetached({
   const pid = promise.child.pid;
   return {
     pid,
-    getOutput: () => output,
+    getOutput: () => {
+      if (!outputLog) {
+        return output;
+      }
+      try {
+        return outputLog.read(64 * 1024).toString('utf8');
+      } catch {
+        return '';
+      }
+    },
     getExitError: () => exitError,
-    stopAsync: async () => await stopDetachedProcessAsync(pid, stopGracePeriodMs),
+    stopAsync: async () => {
+      await stopDetachedProcessAsync(pid, stopGracePeriodMs, outputLog !== undefined);
+      if (outputLog) {
+        try {
+          await withDeviceRunSessionTimeoutAsync(
+            { name: 'Serve-sim output drain', timeoutMs: 5_000 },
+            async () => await outputDrained
+          );
+        } catch (err) {
+          promise.child.stdout?.destroy();
+          promise.child.stderr?.destroy();
+          throw err;
+        }
+        if (outputError) {
+          throw outputError;
+        }
+      }
+    },
   };
 }
 
