@@ -5,6 +5,7 @@ import {
   BuildStepInput,
   BuildStepInputValueTypeName,
 } from '@expo/steps';
+import spawn from '@expo/turtle-spawn';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -149,6 +150,10 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
         );
       }
       const deviceIdentifier = inputs.device_identifier.value as string | undefined;
+      const iosDeviceIdentifier = deviceIdentifier as
+        | IosSimulatorUuid
+        | IosSimulatorName
+        | undefined;
       const capture = parseNetworkCaptureInputs(
         {
           networkCapture: inputs.network_capture.value,
@@ -172,24 +177,21 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
         const iosSimulatorUdid =
           isIos && !(await readLocalEgressHandoffAsync())
             ? await resolveIosSimulatorUdidAsync({
-                deviceIdentifier: deviceIdentifier as
-                  | IosSimulatorUuid
-                  | IosSimulatorName
-                  | undefined,
+                deviceIdentifier: iosDeviceIdentifier,
                 env,
               })
             : undefined;
         tasks.signal.throwIfAborted();
+        if (iosSimulatorUdid) {
+          logger.info(`Selected iOS Simulator: ${iosSimulatorUdid}.`);
+        }
 
         const booted = iosSimulatorUdid
           ? undefined
           : tasks.run(isIos ? 'iOS Simulator boot' : 'Android Emulator boot', async taskLogger => {
               if (isIos) {
                 await bootIosSimulatorAsync({
-                  deviceIdentifier: deviceIdentifier as
-                    | IosSimulatorUuid
-                    | IosSimulatorName
-                    | undefined,
+                  deviceIdentifier: iosDeviceIdentifier,
                   env,
                   logger: taskLogger,
                 });
@@ -234,6 +236,10 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                 await tasks.untilAborted(booted);
               }
               if (iosSimulatorUdid) {
+                await spawn('xcrun', ['simctl', 'bootstatus', iosSimulatorUdid, '-b'], {
+                  env,
+                  signal: tasks.signal,
+                });
                 await prepareBootedIosSimulatorAsync({
                   udid: iosSimulatorUdid,
                   env,
@@ -251,7 +257,7 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                 runtimePlatform,
                 env,
                 logger: taskLogger,
-                ...(iosSimulatorUdid ? { iosSimulatorUdid } : {}),
+                iosSimulatorUdid,
               });
               tasks.signal.throwIfAborted();
               await launchApplicationAsync({
@@ -262,7 +268,7 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                 runtimePlatform,
                 env,
                 logger: taskLogger,
-                ...(iosSimulatorUdid ? { iosSimulatorUdid } : {}),
+                iosSimulatorUdid,
               });
             }
           );

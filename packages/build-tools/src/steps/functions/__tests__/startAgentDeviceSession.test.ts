@@ -1,4 +1,5 @@
 import { BuildRuntimePlatform, type BuildStepContext } from '@expo/steps';
+import spawn from '@expo/turtle-spawn';
 
 import { createGlobalContextMock } from '../../../__tests__/utils/context';
 import { type CustomBuildContext } from '../../../customBuildContext';
@@ -19,6 +20,7 @@ import {
   resolveIosSimulatorUdidAsync,
 } from '../startIosSimulator';
 
+jest.mock('@expo/turtle-spawn', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('../../utils/localEgress', () => ({
   readLocalEgressHandoffAsync: jest.fn(),
   stopLocalEgressResourcesAsync: jest.fn().mockResolvedValue(undefined),
@@ -123,6 +125,7 @@ function sessionDevice(): Device {
 describe(createStartAgentDeviceSessionBuildFunction, () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.mocked(spawn).mockResolvedValue({ stdout: '', stderr: '' } as never);
     jest.mocked(readLocalEgressHandoffAsync).mockResolvedValue(null);
     jest.mocked(resolveIosSimulatorUdidAsync).mockResolvedValue('selected-udid' as never);
     jest.mocked(prepareBootedIosSimulatorAsync).mockResolvedValue(undefined);
@@ -201,6 +204,8 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
 
   it('downloads concurrently and installs on the selected Simulator after host readiness', async () => {
     const hostReady = deferred();
+    const bootComplete = deferred<Awaited<ReturnType<typeof spawn>>>();
+    jest.mocked(spawn).mockReturnValueOnce(bootComplete.promise as ReturnType<typeof spawn>);
     jest.mocked(runAgentDeviceRemoteSessionAsync).mockImplementation(async (_ctx, { device }) => {
       await hostReady.promise;
       await prepareDeviceAsync(device);
@@ -227,7 +232,18 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
     expect(installBuildAsync).not.toHaveBeenCalled();
 
     hostReady.resolve();
+    await flushAsync();
+    expect(spawn).toHaveBeenCalledWith('xcrun', ['simctl', 'bootstatus', 'selected-udid', '-b'], {
+      env: {},
+      signal: expect.any(AbortSignal),
+    });
+    expect(prepareBootedIosSimulatorAsync).not.toHaveBeenCalled();
+    expect(installBuildAsync).not.toHaveBeenCalled();
+    bootComplete.resolve({ stdout: '', stderr: '' } as never);
     await step;
+    expect(
+      jest.mocked(runAgentDeviceRemoteSessionAsync).mock.calls[0][1].logger.info
+    ).toHaveBeenCalledWith('Selected iOS Simulator: selected-udid.');
     expect(prepareBootedIosSimulatorAsync).toHaveBeenCalledWith({
       udid: 'selected-udid',
       env: {},
@@ -236,6 +252,9 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
     });
     expect(jest.mocked(prepareBootedIosSimulatorAsync).mock.invocationCallOrder[0]).toBeLessThan(
       jest.mocked(installBuildAsync).mock.invocationCallOrder[0]
+    );
+    expect(jest.mocked(spawn).mock.invocationCallOrder[0]).toBeLessThan(
+      jest.mocked(prepareBootedIosSimulatorAsync).mock.invocationCallOrder[0]
     );
     expect(installBuildAsync).toHaveBeenCalledWith(
       expect.objectContaining({ artifactPath: '/tmp/App.app', iosSimulatorUdid: 'selected-udid' })
@@ -247,6 +266,51 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
         openUrl: 'exp://example.test',
       })
     );
+  });
+
+  it('fails before preparation and installation when boot completion fails', async () => {
+    const bootError = new Error('bootstatus failed');
+    jest.mocked(spawn).mockRejectedValueOnce(bootError);
+
+    await expect(runStep(BuildRuntimePlatform.DARWIN, { build_id: 'build-id' })).rejects.toBe(
+      bootError
+    );
+    expect(prepareBootedIosSimulatorAsync).not.toHaveBeenCalled();
+    expect(installBuildAsync).not.toHaveBeenCalled();
+    expect(launchApplicationAsync).not.toHaveBeenCalled();
+  });
+
+  it('cancels and drains the boot completion wait before returning', async () => {
+    const controller = new AbortController();
+    const cancelled = new Error('cancelled');
+    let bootWaitStopped = false;
+    jest.mocked(spawn).mockImplementationOnce(
+      ((_command, _args, options) =>
+        new Promise((_resolve, reject) => {
+          expect(options?.signal).toBeInstanceOf(AbortSignal);
+          options!.signal!.addEventListener(
+            'abort',
+            () => {
+              setImmediate(() => {
+                bootWaitStopped = true;
+                reject(new Error('spawn aborted'));
+              });
+            },
+            { once: true }
+          );
+        })) as typeof spawn
+    );
+    const step = runStep(BuildRuntimePlatform.DARWIN, { build_id: 'build-id' }, controller.signal);
+    const failure = expect(step).rejects.toBe(cancelled);
+    await flushAsync();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    controller.abort(cancelled);
+
+    await failure;
+    expect(bootWaitStopped).toBe(true);
+    expect(prepareBootedIosSimulatorAsync).not.toHaveBeenCalled();
+    expect(installBuildAsync).not.toHaveBeenCalled();
+    expect(launchApplicationAsync).not.toHaveBeenCalled();
   });
 
   it('waits for the download when the host is ready first', async () => {

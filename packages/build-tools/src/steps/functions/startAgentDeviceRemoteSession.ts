@@ -167,11 +167,11 @@ export async function runAgentDeviceRemoteSessionAsync(
       env,
       logger: taskLogger,
       timeoutMs: STARTUP_TIMEOUT_MS,
-      ...(hostBootedDevice ? { bootTimeoutMs: IOS_SIMULATOR_BOOT_TIMEOUT_MS } : {}),
+      bootTimeoutMs: hostBootedDevice ? IOS_SIMULATOR_BOOT_TIMEOUT_MS : undefined,
       signal: tasks.signal,
       networkCapture: capture.networkCapture,
       networkCaptureFields: capture.networkCaptureFields,
-      ...(hostBootedDevice ? { iosSimulatorUdid: hostBootedDevice.iosSimulatorUdid } : {}),
+      iosSimulatorUdid: hostBootedDevice?.iosSimulatorUdid,
     });
     tasks.signal.throwIfAborted();
     if (hostBootedDevice) {
