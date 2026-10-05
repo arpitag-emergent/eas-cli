@@ -216,7 +216,8 @@ export async function waitForWebPreviewReadyAsync({
 }): Promise<string> {
   const readyUrl = `http://${WEB_PREVIEW_HOST}:${port}/readyz`;
   let deadline = Date.now() + (bootTimeoutMs ?? timeoutMs);
-  let receivedResponse = false;
+  // serve-sim boots before listening; only connection refusals keep the boot budget.
+  let waitingForHost = bootTimeoutMs !== undefined;
   let lastError: unknown;
   while (Date.now() < deadline) {
     signal?.throwIfAborted();
@@ -232,12 +233,8 @@ export async function waitForWebPreviewReadyAsync({
         retries: 0,
         timeout: 2_000,
         shouldThrowOnNotOk: false,
-        ...(signal ? { signal } : {}),
+        signal,
       });
-      if (!receivedResponse) {
-        receivedResponse = true;
-        deadline = Math.min(deadline, Date.now() + timeoutMs);
-      }
       if (!response.ok) {
         throw new SystemError(`${serverName} readiness returned HTTP ${response.status}.`);
       }
@@ -245,6 +242,15 @@ export async function waitForWebPreviewReadyAsync({
       signal?.throwIfAborted();
       return ready.device;
     } catch (error) {
+      const connectionRefused =
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'ECONNREFUSED';
+      if (waitingForHost && !connectionRefused) {
+        waitingForHost = false;
+        deadline = Math.min(deadline, Date.now() + timeoutMs);
+      }
       lastError = error;
     }
     signal?.throwIfAborted();

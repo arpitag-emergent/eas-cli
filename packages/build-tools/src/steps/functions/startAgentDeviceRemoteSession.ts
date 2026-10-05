@@ -131,7 +131,6 @@ export async function runAgentDeviceRemoteSessionAsync(
   // Each task stores what it started, so the teardown below can stop it even when
   // another task failed first.
   const agentDeviceStartup = tasks.run('agent-device daemon', async taskLogger => {
-    tasks.signal.throwIfAborted();
     taskLogger.info('Launching agent-device daemon.');
     daemonProcess = await startAgentDeviceDaemonAsync({
       packageVersion,

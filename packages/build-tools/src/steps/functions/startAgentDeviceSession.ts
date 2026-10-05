@@ -47,8 +47,8 @@ const ANDROID_DEVICE_NAME = 'EasAndroidDevice01' as AndroidVirtualDeviceName;
 
 /**
  * Starts a device session, downloading the app alongside device and daemon startup.
- * On unguarded iOS, serve-sim boots the selected Simulator before app installation.
- * Guarded iOS and Android keep their existing boot paths.
+ * On iOS without local egress, serve-sim boots the selected Simulator before app installation.
+ * iOS with local egress and Android keep their existing boot paths.
  */
 export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildContext): BuildFunction {
   return new BuildFunction({
@@ -157,7 +157,6 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
         { runtimePlatform }
       );
 
-      signal?.throwIfAborted();
       const tasks = createStartupTasks(logger);
       const onAbort = (): void => tasks.abort(signal!.reason);
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -185,7 +184,6 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
         const booted = iosSimulatorUdid
           ? undefined
           : tasks.run(isIos ? 'iOS Simulator boot' : 'Android Emulator boot', async taskLogger => {
-              tasks.signal.throwIfAborted();
               if (isIos) {
                 await bootIosSimulatorAsync({
                   deviceIdentifier: deviceIdentifier as
@@ -216,7 +214,6 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
 
         downloaded = hasApplication
           ? tasks.run('build download', async taskLogger => {
-              tasks.signal.throwIfAborted();
               const { artifactPath } = await downloadBuildAsync({
                 logger: taskLogger,
                 ...(buildId ? { buildId } : { applicationArchiveUrl: applicationArchiveUrl! }),
@@ -230,14 +227,12 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
           : undefined;
 
         const prepareApplicationAsync = (): Promise<unknown> => {
-          tasks.signal.throwIfAborted();
           applicationReady = tasks.run(
             downloaded ? 'app install and launch' : 'Simulator setup',
             async taskLogger => {
               if (booted) {
                 await tasks.untilAborted(booted);
               }
-              tasks.signal.throwIfAborted();
               if (iosSimulatorUdid) {
                 await prepareBootedIosSimulatorAsync({
                   udid: iosSimulatorUdid,
@@ -245,15 +240,11 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                   logger: taskLogger,
                   signal: tasks.signal,
                 });
-                tasks.signal.throwIfAborted();
               }
               if (!downloaded) {
                 return;
               }
-              const artifactPath = await downloaded.catch(error => {
-                tasks.signal.throwIfAborted();
-                throw error;
-              });
+              const artifactPath = await downloaded;
               tasks.signal.throwIfAborted();
               const { applicationIdentifier, activityName } = await installBuildAsync({
                 artifactPath,
@@ -297,9 +288,6 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                 ready: downloaded ? prepareApplicationAsync() : tasks.untilAborted(booted!),
               },
         });
-      } catch (error) {
-        tasks.abort(error);
-        throw error;
       } finally {
         tasks.abort(new Error('Agent-device session ended.'));
         await Promise.allSettled([downloaded, applicationReady]);

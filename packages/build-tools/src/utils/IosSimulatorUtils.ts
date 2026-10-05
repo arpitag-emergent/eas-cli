@@ -284,11 +284,11 @@ export namespace IosSimulatorUtils {
         async () => {
           await spawn('xcrun', ['simctl', 'io', udid, 'screenshot', readinessScreenshotPath], {
             env,
-            ...(signal ? { signal } : {}),
+            signal,
           });
         },
         {
-          ...(signal ? { signal } : {}),
+          signal,
           retryOptions: {
             // There's 30 * 60 seconds in 30 minutes, which is the timeout.
             retries: 30 * 60,
@@ -306,14 +306,14 @@ export namespace IosSimulatorUtils {
       async () => {
         const isDataMigrating = await isDataMigratorProcessRunning({
           env,
-          ...(signal ? { signal } : {}),
+          signal,
         });
         if (isDataMigrating) {
           throw new Error('com.apple.datamigrator still running');
         }
       },
       {
-        ...(signal ? { signal } : {}),
+        signal,
         retryOptions: {
           retries: 30 * 60,
           retryIntervalMs: 1_000,
@@ -340,13 +340,13 @@ export namespace IosSimulatorUtils {
       try {
         await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'disable', service], {
           env,
-          ...(signal ? { signal } : {}),
+          signal,
         });
 
         try {
           await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'bootout', service], {
             env,
-            ...(signal ? { signal } : {}),
+            signal,
           });
         } catch (err) {
           signal?.throwIfAborted();
@@ -358,7 +358,7 @@ export namespace IosSimulatorUtils {
           !(await isLaunchctlServiceLoadedAsync({
             udid,
             env,
-            ...(signal ? { signal } : {}),
+            signal,
             serviceLabel: 'com.apple.apsd',
           }))
         ) {
@@ -511,7 +511,7 @@ export namespace IosSimulatorUtils {
     signal?: AbortSignal;
   }): Promise<boolean> {
     try {
-      const result = await spawn('ps', ['-eo', 'pid,comm'], { env, ...(signal ? { signal } : {}) });
+      const result = await spawn('ps', ['-eo', 'pid,comm'], { env, signal });
 
       return result.stdout.includes('com.apple.datamigrator');
     } catch {
@@ -541,7 +541,7 @@ async function isLaunchctlServiceLoadedAsync({
   try {
     await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'list', serviceLabel], {
       env,
-      ...(signal ? { signal } : {}),
+      signal,
     });
     return true;
   } catch (err) {

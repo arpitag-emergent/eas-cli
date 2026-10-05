@@ -126,7 +126,7 @@ it('allows a cold boot to take longer than the normal host startup deadline', as
   const readyResponse = jest.mocked(turtleFetch).getMockImplementation()!;
   jest.mocked(turtleFetch).mockImplementation(async (...args) => {
     if (Date.now() - startedAt < 65_000) {
-      throw new Error('ECONNREFUSED');
+      throw Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' });
     }
     return await readyResponse(...args);
   });
@@ -156,6 +156,23 @@ it('uses the shorter startup deadline after a cold host starts responding', asyn
     bootTimeoutMs: 30 * 60_000,
   });
   const rejected = expect(waiting).rejects.toThrow('HTTP 503');
+  await jest.advanceTimersByTimeAsync(60_000);
+  await rejected;
+});
+
+it('uses the shorter startup deadline when a listening host never answers readiness', async () => {
+  jest.useFakeTimers();
+  jest
+    .mocked(turtleFetch)
+    .mockRejectedValue(Object.assign(new Error('network timeout'), { type: 'request-timeout' }));
+  const waiting = waitForWebPreviewReadyAsync({
+    previewServer: { pid: undefined, getOutput: () => '' },
+    serverName: 'serve-sim',
+    port: 4321,
+    timeoutMs: 60_000,
+    bootTimeoutMs: 30 * 60_000,
+  });
+  const rejected = expect(waiting).rejects.toThrow('network timeout');
   await jest.advanceTimersByTimeAsync(60_000);
   await rejected;
 });

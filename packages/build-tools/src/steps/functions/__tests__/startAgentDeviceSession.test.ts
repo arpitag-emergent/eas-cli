@@ -19,10 +19,10 @@ import {
   resolveIosSimulatorUdidAsync,
 } from '../startIosSimulator';
 
-jest.mock('../../utils/localEgressSession', () => ({
-  withLocalEgressSession: (fn: unknown) => fn,
+jest.mock('../../utils/localEgress', () => ({
+  readLocalEgressHandoffAsync: jest.fn(),
+  stopLocalEgressResourcesAsync: jest.fn().mockResolvedValue(undefined),
 }));
-jest.mock('../../utils/localEgress', () => ({ readLocalEgressHandoffAsync: jest.fn() }));
 jest.mock('../../utils/remoteDeviceRunSession', () => ({
   ...jest.requireActual('../../utils/remoteDeviceRunSession'),
   selectXcodeDeveloperDirectoryAsync: jest.fn(),
@@ -127,9 +127,11 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
     jest.mocked(resolveIosSimulatorUdidAsync).mockResolvedValue('selected-udid' as never);
     jest.mocked(prepareBootedIosSimulatorAsync).mockResolvedValue(undefined);
     jest.mocked(getAgentDeviceRemoteSessionEnvOrThrow).mockReturnValue(sessionEnv);
-    jest.mocked(runAgentDeviceRemoteSessionAsync).mockImplementation(async (_ctx, { device }) => {
-      await prepareDeviceAsync(device);
-    });
+    jest
+      .mocked(runAgentDeviceRemoteSessionAsync)
+      .mockImplementation(async (_ctx, { device, tasks }) => {
+        await tasks.untilAborted(prepareDeviceAsync(device));
+      });
     jest.mocked(bootIosSimulatorAsync).mockResolvedValue({
       deviceIdentifier: 'iPhone 17' as never,
       udid: 'udid' as never,

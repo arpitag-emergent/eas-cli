@@ -655,6 +655,8 @@ describe(waitForWebPreviewReadyAsync, () => {
       .mocked(turtleFetch)
       .mockRejectedValueOnce(new Error('not ready'))
       .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
         json: async () => ({ status: 'ready', device: 'DEVICE-A' }),
       } as unknown as Awaited<ReturnType<typeof turtleFetch>>);
 
@@ -833,6 +835,8 @@ describe(startDeviceSessionHostAsync, () => {
         } as unknown as Awaited<ReturnType<typeof turtleFetch>>;
       }
       return {
+        ok: true,
+        status: 200,
         json: async () => ({ status: 'ready', device: 'device-id' }),
       } as unknown as Awaited<ReturnType<typeof turtleFetch>>;
     });
