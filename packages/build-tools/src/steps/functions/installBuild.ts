@@ -55,11 +55,13 @@ export function createInstallBuildFunction(): BuildFunction {
 export async function installBuildAsync({
   artifactPath,
   runtimePlatform,
+  iosSimulatorUdid,
   env,
   logger,
 }: {
   artifactPath: string;
   runtimePlatform: BuildRuntimePlatform;
+  iosSimulatorUdid?: string;
   env: BuildStepEnv;
   logger: bunyan;
 }): Promise<{ applicationIdentifier: string; activityName?: string }> {
@@ -94,7 +96,10 @@ export async function installBuildAsync({
     }
 
     logger.info(`Installing ${artifactPath} on the iOS Simulator.`);
-    await spawn('xcrun', ['simctl', 'install', 'booted', artifactPath], { env, logger });
+    await spawn('xcrun', ['simctl', 'install', iosSimulatorUdid ?? 'booted', artifactPath], {
+      env,
+      logger,
+    });
     return { applicationIdentifier };
   }
 

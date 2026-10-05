@@ -90,16 +90,7 @@ export function createStartIosSimulatorBuildFunction(): BuildFunction {
             logger,
           });
 
-          try {
-            await IosSimulatorUtils.disableApsdAsync({ udid: cloneUdid, env });
-          } catch (err) {
-            logger.warn({ err }, 'Failed to disable apsd in the Simulator.');
-          }
-
-          await IosSimulatorUtils.waitForReadyAsync({
-            udid: cloneUdid,
-            env,
-          });
+          await prepareBootedIosSimulatorAsync({ udid: cloneUdid, env, logger });
 
           logger.info(`${cloneDeviceName} is ready.`);
           logger.info('');
@@ -144,23 +135,16 @@ export async function bootIosSimulatorAsync({
     logger.info('');
   }
 
-  const deviceIdentifier = deviceIdentifierInput ?? (await findMostGenericIphoneUuidAsync({ env }));
-  if (!deviceIdentifier) {
-    throw new Error('Could not find an iPhone among available simulator devices.');
-  }
+  const deviceIdentifier = await selectIosSimulatorIdentifierAsync({
+    deviceIdentifier: deviceIdentifierInput,
+    env,
+  });
 
   if (enableAccessibilitySettings) {
     await IosSimulatorUtils.enableAccessibilitySettingsAsync({ deviceIdentifier, env });
   }
   const udid = await bootWithLocalEgressAsync({ deviceIdentifier, env, logger });
-
-  try {
-    await IosSimulatorUtils.disableApsdAsync({ udid, env });
-  } catch (err) {
-    logger.warn({ err }, 'Failed to disable apsd in the Simulator.');
-  }
-
-  await IosSimulatorUtils.waitForReadyAsync({ udid, env });
+  await prepareBootedIosSimulatorAsync({ udid, env, logger });
 
   logger.info('');
 
@@ -168,6 +152,48 @@ export async function bootIosSimulatorAsync({
   const displayName = device?.displayName ?? deviceIdentifier;
   logger.info(`${displayName} is ready.`);
   return { deviceIdentifier, udid, displayName };
+}
+
+export async function prepareBootedIosSimulatorAsync({
+  udid,
+  env,
+  logger,
+}: {
+  udid: IosSimulatorUuid;
+  env: BuildStepEnv;
+  logger: bunyan;
+}): Promise<void> {
+  try {
+    await IosSimulatorUtils.disableApsdAsync({ udid, env });
+  } catch (err) {
+    logger.warn({ err }, 'Failed to disable apsd in the Simulator.');
+  }
+  await IosSimulatorUtils.waitForReadyAsync({ udid, env });
+}
+
+export async function resolveIosSimulatorUdidAsync({
+  deviceIdentifier,
+  env,
+}: {
+  deviceIdentifier?: IosSimulatorUuid | IosSimulatorName;
+  env: BuildStepEnv;
+}): Promise<IosSimulatorUuid> {
+  const selectedIdentifier = await selectIosSimulatorIdentifierAsync({ deviceIdentifier, env });
+  return await IosSimulatorUtils.resolveUdidAsync({ deviceIdentifier: selectedIdentifier, env });
+}
+
+async function selectIosSimulatorIdentifierAsync({
+  deviceIdentifier,
+  env,
+}: {
+  deviceIdentifier?: IosSimulatorUuid | IosSimulatorName;
+  env: BuildStepEnv;
+}): Promise<IosSimulatorUuid | IosSimulatorName> {
+  const selectedIdentifier = deviceIdentifier ?? (await findMostGenericIphoneUuidAsync({ env }));
+  if (!selectedIdentifier) {
+    throw new Error('Could not find an iPhone among available simulator devices.');
+  }
+  return selectedIdentifier;
 }
 
 /**

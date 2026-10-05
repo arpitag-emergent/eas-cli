@@ -38,6 +38,7 @@ const SRC_DIR = '/tmp/agent-device-src';
 const AGENT_DEVICE_STATE_DIR = path.join(os.homedir(), '.agent-device');
 const DAEMON_JSON_PATH = path.join(AGENT_DEVICE_STATE_DIR, 'daemon.json');
 const STARTUP_TIMEOUT_MS = 60_000;
+const IOS_SIMULATOR_BOOT_TIMEOUT_MS = 30 * 60_000;
 const AGENT_DEVICE_DAEMON_ENV = {
   AGENT_DEVICE_DAEMON_SERVER_MODE: 'http',
   AGENT_DEVICE_RETAIN_ARTIFACTS: '1',
@@ -76,13 +77,9 @@ export function getAgentDeviceRemoteSessionEnvOrThrow(
  * Starts the agent-device daemon, its tunnel, the session host and the web preview,
  * reports the session as ready, and keeps it alive until it stops.
  *
- * The daemon does not need the device, so it starts at once. The session host starts
- * when `device.booted` resolves. The session is reported as ready only when both are
- * up and `device.ready` (the app is installed and launched) resolved too.
- *
- * The first failure aborts `tasks.signal`: each part stops before its next stage, and
- * the teardown then stops whatever was started. `device.ready` must settle soon after
- * an abort, because the teardown waits for it.
+ * The host boots an explicit iOS Simulator before preparing the app, or waits for
+ * an externally booted device. Startup failures abort the other tasks; teardown
+ * waits for their work before stopping every acquired resource.
  */
 export async function runAgentDeviceRemoteSessionAsync(
   ctx: CustomBuildContext,
@@ -109,9 +106,16 @@ export async function runAgentDeviceRemoteSessionAsync(
     maxDurationSeconds: number | undefined;
     capture: ReturnType<typeof parseNetworkCaptureInputs>;
     tasks: StartupTasks;
-    device: { booted: Promise<unknown>; ready: Promise<unknown> };
+    device:
+      | { booted: Promise<unknown>; ready: Promise<unknown> }
+      | { iosSimulatorUdid: string; prepareApplicationAsync: () => Promise<unknown> };
   }
 ): Promise<void> {
+  signal?.throwIfAborted();
+  tasks.signal.throwIfAborted();
+  const onAbort = (): void => tasks.abort(signal!.reason);
+  signal?.addEventListener('abort', onAbort, { once: true });
+
   logger.info(
     `Starting agent-device remote session (version: ${packageVersion ?? 'latest'}, runtime: ${runtimePlatform}).`
   );
@@ -125,6 +129,7 @@ export async function runAgentDeviceRemoteSessionAsync(
   // Each task stores what it started, so the teardown below can stop it even when
   // another task failed first.
   const agentDeviceStartup = tasks.run('agent-device daemon', async taskLogger => {
+    tasks.signal.throwIfAborted();
     taskLogger.info('Launching agent-device daemon.');
     daemonProcess = await startAgentDeviceDaemonAsync({
       packageVersion,
@@ -147,40 +152,51 @@ export async function runAgentDeviceRemoteSessionAsync(
       authtoken: ngrokAuthtoken,
       logger: taskLogger,
     });
+    tasks.signal.throwIfAborted();
     taskLogger.info(`Tunnel is ready at ${agentDeviceTunnel.url}.`);
     return { ...daemonInfo, remoteSessionUrl: agentDeviceTunnel.url };
   });
   const sessionHostStartup = tasks.run('session host', async taskLogger => {
-    // A boot cannot be cancelled, so stop waiting for it when startup is aborted.
-    await tasks.untilAborted(device.booted);
+    if ('booted' in device) {
+      await tasks.untilAborted(device.booted);
+    }
     tasks.signal.throwIfAborted();
     sessionHost = await startDeviceSessionHostAsync(ctx, {
       runtimePlatform,
       env,
       logger: taskLogger,
-      timeoutMs: STARTUP_TIMEOUT_MS,
+      timeoutMs: 'iosSimulatorUdid' in device ? IOS_SIMULATOR_BOOT_TIMEOUT_MS : STARTUP_TIMEOUT_MS,
+      signal: tasks.signal,
       networkCapture: capture.networkCapture,
       networkCaptureFields: capture.networkCaptureFields,
+      ...('iosSimulatorUdid' in device ? { iosSimulatorUdid: device.iosSimulatorUdid } : {}),
     });
     tasks.signal.throwIfAborted();
+    if ('prepareApplicationAsync' in device) {
+      await device.prepareApplicationAsync();
+      tasks.signal.throwIfAborted();
+    }
     const webPreview = await sessionHost.openPreviewAsync({ baseDomain: ngrokTunnelDomain });
+    tasks.signal.throwIfAborted();
     taskLogger.info(
       `Web preview URL: ${webPreview.previewPageUrl} (server: ${webPreview.apiUrl}).`
     );
     return webPreview;
   });
+  const deviceReady = 'ready' in device ? device.ready : undefined;
 
   try {
     const [
       { port: daemonPort, token: daemonToken, remoteSessionUrl: agentDeviceRemoteSessionUrl },
       webPreview,
-    ] = await Promise.all([agentDeviceStartup, sessionHostStartup, device.ready]).catch(
+    ] = await Promise.all([agentDeviceStartup, sessionHostStartup, deviceReady]).catch(
       (err: unknown) => {
         // Also aborts for a `device.ready` that does not come from `tasks.run`.
         tasks.abort(err);
         throw err;
       }
     );
+    tasks.signal.throwIfAborted();
     logger.info(tasks.summary());
 
     await uploadRemoteSessionConfigWithLocalEgressAsync({
@@ -197,6 +213,7 @@ export async function runAgentDeviceRemoteSessionAsync(
       },
       logger,
     });
+    tasks.signal.throwIfAborted();
     void pollAgentDeviceArtifactsForUploadAsync(ctx, {
       deviceRunSessionId,
       daemonUrl: `http://127.0.0.1:${daemonPort}`,
@@ -232,7 +249,8 @@ export async function runAgentDeviceRemoteSessionAsync(
     // Promise.all rejects on the first failure while other tasks can still be starting.
     // They stop at their next abort check. Wait for all of them, so the teardown sees
     // everything that was started.
-    await Promise.allSettled([agentDeviceStartup, sessionHostStartup, device.ready]);
+    await Promise.allSettled([agentDeviceStartup, sessionHostStartup, deviceReady]);
+    signal?.removeEventListener('abort', onAbort);
     const startedDaemon = daemonProcess;
     await finishRemoteSessionAsync({
       logger,
@@ -274,6 +292,7 @@ export async function startAgentDeviceDaemonAsync({
   /** Kills the install and stops before the daemon starts, when aborted. No git fallback then. */
   signal?: AbortSignal;
 }): Promise<DetachedProcessHandle> {
+  signal?.throwIfAborted();
   const packageSpec = createAgentDevicePackageSpec(packageVersion);
   const packageManager = resolveConfiguredPackageManager(env, PackageManager.BUN);
   const installDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'eas-agent-device-'));
@@ -283,6 +302,7 @@ export async function startAgentDeviceDaemonAsync({
   );
 
   try {
+    signal?.throwIfAborted();
     const add = resolvePackageAdd(packageManager, packageSpec);
     logger.info(`Installing ${packageSpec} with ${add.command}.`);
     await spawn(add.command, add.args, { cwd: installDir, env, logger, signal });

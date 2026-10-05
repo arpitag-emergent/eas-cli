@@ -91,6 +91,24 @@ describe(installBuildAsync, () => {
     ]);
   });
 
+  it('installs on the selected iOS Simulator when other devices are booted', async () => {
+    const artifactPath = path.join(await makeTemporaryDirectoryAsync(), 'Example.app');
+    await fs.promises.mkdir(artifactPath);
+    mockedSpawn.mockResolvedValueOnce({ stdout: 'com.example.app\n', stderr: '' } as any);
+    await installBuildAsync({
+      artifactPath,
+      runtimePlatform: BuildRuntimePlatform.DARWIN,
+      iosSimulatorUdid: 'session-udid',
+      env: {},
+      logger: createMockLogger(),
+    });
+    expect(mockedSpawn).toHaveBeenLastCalledWith(
+      'xcrun',
+      ['simctl', 'install', 'session-udid', artifactPath],
+      expect.anything()
+    );
+  });
+
   it.each([
     [BuildRuntimePlatform.DARWIN, 'example.ipa'],
     [BuildRuntimePlatform.LINUX, 'example.aab'],

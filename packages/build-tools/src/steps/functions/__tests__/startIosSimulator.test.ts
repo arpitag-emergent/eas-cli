@@ -9,7 +9,10 @@ import {
   resolveLocalEgressBootEnvironmentAsync,
   verifyLocalEgressGuardAsync,
 } from '../../utils/localEgressGuard';
-import { createStartIosSimulatorBuildFunction } from '../startIosSimulator';
+import {
+  createStartIosSimulatorBuildFunction,
+  resolveIosSimulatorUdidAsync,
+} from '../startIosSimulator';
 
 jest.mock('@expo/turtle-spawn', () => ({
   __esModule: true,
@@ -101,6 +104,33 @@ describe(createStartIosSimulatorBuildFunction, () => {
       deviceIdentifier: 'base',
       env: expect.any(Object),
     });
+  });
+
+  it('resolves a requested Simulator without booting or configuring it', async () => {
+    await expect(
+      resolveIosSimulatorUdidAsync({ deviceIdentifier: 'iPhone 15' as never, env: {} })
+    ).resolves.toBe('base');
+
+    expect(mockedUtils.bootAsync).not.toHaveBeenCalled();
+    expect(mockedUtils.startAsync).not.toHaveBeenCalled();
+    expect(mockedUtils.enableAccessibilitySettingsAsync).not.toHaveBeenCalled();
+    expect(mockedInstallGuard).not.toHaveBeenCalled();
+  });
+
+  it('selects the same default iPhone without booting', async () => {
+    mockedUtils.getAvailableDevicesAsync.mockResolvedValue([
+      { name: 'iPad', udid: 'ipad' },
+      { name: 'iPhone 15 Pro', udid: 'pro' },
+      { name: 'iPhone 15', udid: 'base' },
+    ] as never);
+
+    await expect(resolveIosSimulatorUdidAsync({ env: {} })).resolves.toBe('base');
+    expect(mockedUtils.bootAsync).not.toHaveBeenCalled();
+
+    mockedUtils.getAvailableDevicesAsync.mockResolvedValue([]);
+    await expect(resolveIosSimulatorUdidAsync({ env: {} })).rejects.toThrow(
+      'Could not find an iPhone'
+    );
   });
 
   it('enables accessibility settings before starting the main device and every clone when requested', async () => {

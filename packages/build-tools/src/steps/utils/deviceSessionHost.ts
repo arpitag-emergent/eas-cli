@@ -103,6 +103,7 @@ export function createServeSimArgs({
   websiteArgs = [],
   shareUrl,
   packageVersion,
+  iosSimulatorUdid,
   launchAppIdentifier,
   launchArgs = [],
   openUrl,
@@ -114,11 +115,13 @@ export function createServeSimArgs({
   websiteArgs?: string[];
   shareUrl?: string;
   packageVersion?: string;
+  iosSimulatorUdid?: string;
   networkCapture?: boolean;
   networkCaptureFields?: string[];
 } & ServeSimLaunchOptions): string[] {
   return [
     createServeSimPackageSpec(packageVersion),
+    ...(iosSimulatorUdid ? [iosSimulatorUdid] : []),
     '--port',
     String(port),
     '--host',
@@ -201,16 +204,19 @@ export async function waitForWebPreviewReadyAsync({
   serverName,
   port,
   timeoutMs,
+  signal,
 }: {
   previewServer: Pick<DetachedProcessHandle, 'pid' | 'getOutput'>;
   serverName: string;
   port: number;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const readyUrl = `http://${WEB_PREVIEW_HOST}:${port}/readyz`;
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     if (previewServer.pid !== undefined && !isProcessRunning(previewServer.pid)) {
       throw new SystemError(
         `${serverName} exited before becoming ready. Last output:\n${
@@ -222,14 +228,18 @@ export async function waitForWebPreviewReadyAsync({
       const response = await turtleFetch(readyUrl, 'GET', {
         retries: 0,
         timeout: 2_000,
+        ...(signal ? { signal } : {}),
       });
       const ready = WebPreviewReadyResponseSchema.parse(await response.json());
+      signal?.throwIfAborted();
       return ready.device;
     } catch (error) {
       lastError = error;
     }
+    signal?.throwIfAborted();
     await sleepAsync(WEB_PREVIEW_READY_POLL_INTERVAL_MS);
   }
+  signal?.throwIfAborted();
   throw new SystemError(
     `Timed out waiting for ${serverName} readiness at ${readyUrl}${
       lastError instanceof Error ? `: ${lastError.message}` : ''
@@ -274,7 +284,9 @@ type DeviceSessionHostOptions = {
   env: BuildStepEnv;
   logger: bunyan;
   timeoutMs: number;
+  signal?: AbortSignal;
   packageVersion?: string;
+  iosSimulatorUdid?: string;
   networkCapture?: boolean;
   networkCaptureFields?: string[];
 } & ServeSimLaunchOptions;
@@ -307,7 +319,9 @@ async function startDeviceSessionHostInPhaseAsync(
     env,
     logger,
     timeoutMs,
+    signal,
     packageVersion,
+    iosSimulatorUdid,
     launchAppIdentifier,
     launchArgs,
     openUrl,
@@ -316,6 +330,7 @@ async function startDeviceSessionHostInPhaseAsync(
   }: DeviceSessionHostOptions,
   onFinished: (successful: boolean) => void
 ): Promise<DeviceSessionHost> {
+  signal?.throwIfAborted();
   const isAndroid = runtimePlatform === BuildRuntimePlatform.LINUX;
   // Unreachable from the step functions, which reject a non-Darwin launch while parsing.
   // Kept because this function is exported and expo-device-hub cannot launch.
@@ -363,6 +378,7 @@ async function startDeviceSessionHostInPhaseAsync(
           port,
           turnArgs,
           packageVersion,
+          iosSimulatorUdid,
           websiteArgs: websiteOriginServeSimArgs(env),
           shareUrl: previewPageUrl,
           launchAppIdentifier,
@@ -385,6 +401,7 @@ async function startDeviceSessionHostInPhaseAsync(
   });
   let previewServer: DetachedProcessHandle;
   try {
+    signal?.throwIfAborted();
     previewServer = spawnDetached({
       command: previewExec.command,
       args: previewExec.args,
@@ -493,7 +510,13 @@ async function startDeviceSessionHostInPhaseAsync(
       serverName,
       port,
       timeoutMs,
+      signal,
     });
+    if (iosSimulatorUdid && device.toLowerCase() !== iosSimulatorUdid.toLowerCase()) {
+      throw new SystemError(
+        `serve-sim became ready on ${device}, but this session requested ${iosSimulatorUdid}.`
+      );
+    }
     hostReady = true;
     if (!isAndroid) {
       previewToken = await readServeSimPreviewTokenAsync(device);
@@ -508,6 +531,7 @@ async function startDeviceSessionHostInPhaseAsync(
       secrets.push(previewToken);
       IosSimulatorRecordingUtils.useServeSimPackage(packageSpec);
     }
+    signal?.throwIfAborted();
     return host;
   } catch (error) {
     await host.finishAsync();

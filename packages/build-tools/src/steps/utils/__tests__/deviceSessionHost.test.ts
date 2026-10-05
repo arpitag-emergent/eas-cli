@@ -13,7 +13,7 @@ import {
   findUnlistedDeviceScreenRecordingsAsync,
   uploadDeviceRunSessionScreenRecordingsAsync,
 } from '../deviceRunSessionScreenRecordings';
-import { startDeviceSessionHostAsync } from '../deviceSessionHost';
+import { createServeSimArgs, startDeviceSessionHostAsync } from '../deviceSessionHost';
 import { fetchWebPreviewTurnArgsAsync, spawnDetached } from '../remoteDeviceRunSession';
 
 jest.mock('@ngrok/ngrok');
@@ -105,6 +105,51 @@ afterEach(async () => {
   await Promise.all(
     directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))
   );
+});
+
+it('targets the selected Simulator in the serve-sim invocation', () => {
+  expect(createServeSimArgs({ port: 4321, iosSimulatorUdid: 'session-udid' })).toEqual(
+    expect.arrayContaining(['@expo/serve-sim@latest', 'session-udid', '--port', '4321'])
+  );
+});
+
+it('stops a host that became ready on a different Simulator', async () => {
+  await expect(
+    startDeviceSessionHostAsync(ctx, {
+      runtimePlatform: BuildRuntimePlatform.DARWIN,
+      iosSimulatorUdid: 'session-udid',
+      env,
+      logger,
+      timeoutMs: 10_000,
+    })
+  ).rejects.toThrow('became ready on emulator-5554, but this session requested session-udid');
+  expect(stopServer).toHaveBeenCalledTimes(1);
+  expect(ngrok.forward).not.toHaveBeenCalled();
+});
+
+it('stops a host when a cold boot is cancelled during readiness polling', async () => {
+  const controller = new AbortController();
+  const cancelled = new Error('session cancelled');
+  jest.mocked(turtleFetch).mockImplementationOnce(async (_url, _method, options) => {
+    expect(options?.signal).toBe(controller.signal);
+    controller.abort(cancelled);
+    throw new Error('readiness request aborted');
+  });
+  await expect(
+    startDeviceSessionHostAsync(ctx, {
+      runtimePlatform: BuildRuntimePlatform.DARWIN,
+      iosSimulatorUdid: 'session-udid',
+      env,
+      logger,
+      timeoutMs: 30 * 60_000,
+      signal: controller.signal,
+    })
+  ).rejects.toBe(cancelled);
+  expect(stopServer).toHaveBeenCalledTimes(1);
+  expect(ngrok.forward).not.toHaveBeenCalled();
+  const directory =
+    jest.mocked(spawnDetached).mock.calls[0][0].env.EXPO_DEVICE_HUB_SCREENSHOT_DIRECTORY;
+  await expect(access(directory!)).rejects.toThrow();
 });
 
 it('records by default with no preview and finalizes before process stop, uploading exactly once', async () => {

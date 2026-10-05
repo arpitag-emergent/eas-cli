@@ -71,6 +71,7 @@ export async function launchApplicationAsync({
   launchArgs = [],
   openUrl,
   runtimePlatform,
+  iosSimulatorUdid,
   env,
   logger,
 }: {
@@ -79,19 +80,21 @@ export async function launchApplicationAsync({
   launchArgs?: string[];
   openUrl?: string;
   runtimePlatform: BuildRuntimePlatform;
+  iosSimulatorUdid?: string;
   env: BuildStepEnv;
   logger: bunyan;
 }): Promise<void> {
   if (runtimePlatform === BuildRuntimePlatform.DARWIN) {
+    const device = iosSimulatorUdid ?? 'booted';
     logApplicationLaunch(logger, applicationIdentifier, launchArgs);
-    await spawn('xcrun', ['simctl', 'launch', 'booted', applicationIdentifier, ...launchArgs], {
+    await spawn('xcrun', ['simctl', 'launch', device, applicationIdentifier, ...launchArgs], {
       env,
       logger,
     });
     if (openUrl) {
-      await preapproveIosUrlSchemeAsync({ applicationIdentifier, openUrl, env, logger });
+      await preapproveIosUrlSchemeAsync({ applicationIdentifier, openUrl, device, env, logger });
       logger.info(`Opening ${openUrl} in ${applicationIdentifier}.`);
-      await spawn('xcrun', ['simctl', 'openurl', 'booted', openUrl], { env, logger });
+      await spawn('xcrun', ['simctl', 'openurl', device, openUrl], { env, logger });
     }
     return;
   }
@@ -137,11 +140,13 @@ export async function launchApplicationAsync({
 async function preapproveIosUrlSchemeAsync({
   applicationIdentifier,
   openUrl,
+  device,
   env,
   logger,
 }: {
   applicationIdentifier: string;
   openUrl: string;
+  device: string;
   env: BuildStepEnv;
   logger: bunyan;
 }): Promise<void> {
@@ -156,7 +161,7 @@ async function preapproveIosUrlSchemeAsync({
       [
         'simctl',
         'spawn',
-        'booted',
+        device,
         'defaults',
         'write',
         IOS_URL_SCHEME_APPROVAL_DOMAIN,
