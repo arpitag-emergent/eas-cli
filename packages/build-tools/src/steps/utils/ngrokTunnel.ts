@@ -98,12 +98,14 @@ export async function startNgrokTunnelAsync({
         { name: 'Late ngrok tunnel retirement', timeoutMs: STOP_TIMEOUT_MS },
         retireListenersAsync
       );
-    } catch {}
+    } catch (err) {
+      logger.warn({ err }, `Could not retire late ngrok tunnel ${domain}.`);
+    }
   }
 
-  let openingInProgress = false;
+  let pendingOpen: Promise<ngrok.Listener> | undefined;
   async function openAsync(forceNewSession = false): Promise<ngrok.Listener> {
-    if (openingInProgress) {
+    if (pendingOpen) {
       throw new SystemError(`A previous ngrok tunnel open for ${domain} is still pending.`);
     }
     let acquired: ngrok.Listener | undefined;
@@ -124,9 +126,9 @@ export async function startNgrokTunnelAsync({
               ...(forceNewSession ? { force_new_session: true } : {}),
             })
             .finally(() => {
-              openingInProgress = false;
+              pendingOpen = undefined;
             });
-          openingInProgress = true;
+          pendingOpen = opening;
           void opening
             .then(listener => {
               acquired = listener;
@@ -271,22 +273,18 @@ export async function startNgrokTunnelAsync({
     stopAsync: () =>
       (stopTask ??= (async () => {
         controller.abort();
-        try {
-          await withDeviceRunSessionTimeoutAsync(
-            { name: 'Ngrok tunnel stop', timeoutMs: STOP_TIMEOUT_MS },
-            async stopSignal => {
-              await supervision;
-              if (listener) {
-                retiredListeners.add(listener);
-                listener = undefined;
-              }
-              await retireListenersAsync(stopSignal);
+        await withDeviceRunSessionTimeoutAsync(
+          { name: `Ngrok tunnel ${domain} stop`, timeoutMs: STOP_TIMEOUT_MS },
+          async stopSignal => {
+            await supervision;
+            await pendingOpen?.catch(() => {});
+            if (listener) {
+              retiredListeners.add(listener);
+              listener = undefined;
             }
-          );
-        } catch (err) {
-          logger.warn({ err }, `Could not stop ngrok tunnel ${domain}.`);
-          throw err;
-        }
+            await retireListenersAsync(stopSignal);
+          }
+        );
       })()),
   };
 }

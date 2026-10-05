@@ -184,9 +184,12 @@ it('closes a listener that finishes opening after shutdown, with idempotent clea
   await jest.advanceTimersByTimeAsync(45_000);
   const stopping = tunnel.stopAsync();
   expect(tunnel.stopAsync()).toBe(stopping);
-  await stopping;
-  resolveOpening(replacement as never);
+  const stopped = jest.fn();
+  void stopping.then(stopped);
   await jest.advanceTimersByTimeAsync(0);
+  expect(stopped).not.toHaveBeenCalled();
+  resolveOpening(replacement as never);
+  await stopping;
   expect(replacement.close).toHaveBeenCalledTimes(1);
   await jest.advanceTimersByTimeAsync(120_000);
   expect(ngrok.forward).toHaveBeenCalledTimes(2);
@@ -221,14 +224,64 @@ it('retries a rejected close when a reopen finishes after shutdown', async () =>
     .mockReturnValueOnce(new Promise(resolve => (resolveOpening = resolve)));
   const tunnel = await startNgrokTunnelAsync(options);
   await jest.advanceTimersByTimeAsync(45_000);
-  await tunnel.stopAsync();
+  const stopping = tunnel.stopAsync();
   replacement.close.mockRejectedValueOnce(new Error('temporary unlisten failure'));
   resolveOpening(replacement as never);
   await jest.advanceTimersByTimeAsync(250);
+  await stopping;
   expect(replacement.close).toHaveBeenCalledTimes(2);
   const warnings = jest.mocked(logger.warn).mock.calls.length;
   await jest.advanceTimersByTimeAsync(120_000);
   expect(logger.warn).toHaveBeenCalledTimes(warnings);
+});
+
+it('fails stop if an in-flight reopen still has not settled by the stop deadline', async () => {
+  failPublicProbes();
+  let resolveOpening!: (value: ngrok.Listener) => void;
+  jest
+    .mocked(ngrok.forward)
+    .mockReset()
+    .mockResolvedValueOnce(initial as never)
+    .mockReturnValueOnce(new Promise(resolve => (resolveOpening = resolve)));
+  const tunnel = await startNgrokTunnelAsync(options);
+  await jest.advanceTimersByTimeAsync(45_000);
+  const rejected = expect(tunnel.stopAsync()).rejects.toThrow(
+    'Ngrok tunnel web-preview-fixed.example.test stop timed out after 4000ms'
+  );
+  await jest.advanceTimersByTimeAsync(4_000);
+  await rejected;
+  expect(ngrok.forward).toHaveBeenCalledTimes(2);
+  resolveOpening(replacement as never);
+  await jest.advanceTimersByTimeAsync(0);
+  expect(replacement.close).toHaveBeenCalledTimes(1);
+});
+
+it('fails stop if a pending reopen arrives but cannot be retired', async () => {
+  failPublicProbes();
+  let resolveOpening!: (value: ngrok.Listener) => void;
+  jest
+    .mocked(ngrok.forward)
+    .mockReset()
+    .mockResolvedValueOnce(initial as never)
+    .mockReturnValueOnce(new Promise(resolve => (resolveOpening = resolve)));
+  replacement.close.mockRejectedValue(new Error('unlisten failed'));
+  const tunnel = await startNgrokTunnelAsync(options);
+  await jest.advanceTimersByTimeAsync(45_000);
+  const rejected = expect(tunnel.stopAsync()).rejects.toThrow(
+    'Ngrok tunnel web-preview-fixed.example.test stop timed out'
+  );
+  resolveOpening(replacement as never);
+  await jest.advanceTimersByTimeAsync(4_000);
+  await rejected;
+  expect(replacement.close.mock.calls.length).toBeGreaterThan(1);
+  expect(logger.warn).toHaveBeenCalledWith(
+    expect.objectContaining({ err: expect.any(Error) }),
+    'Could not retire late ngrok tunnel web-preview-fixed.example.test.'
+  );
+  const warnings = jest.mocked(logger.warn).mock.calls.length;
+  await jest.advanceTimersByTimeAsync(120_000);
+  expect(logger.warn).toHaveBeenCalledTimes(warnings);
+  expect(ngrok.forward).toHaveBeenCalledTimes(2);
 });
 
 it('rejects a changed public URL and closes the replacement', async () => {
@@ -349,7 +402,9 @@ it('retries an old listener without repeating its close warning on every probe',
   expect(initial.close.mock.calls.length).toBeGreaterThan(1);
   expect(ngrok.forward).toHaveBeenCalledTimes(2);
   expect(logger.warn).toHaveBeenCalledTimes(warnings);
-  const rejected = expect(tunnel.stopAsync()).rejects.toThrow('Ngrok tunnel stop timed out');
+  const rejected = expect(tunnel.stopAsync()).rejects.toThrow(
+    'Ngrok tunnel web-preview-fixed.example.test stop timed out'
+  );
   await jest.advanceTimersByTimeAsync(4_000);
   await rejected;
   expect(replacement.close).toHaveBeenCalledTimes(1);
@@ -372,7 +427,9 @@ it('bounds shutdown during recovery without duplicating a pending native close',
   await jest.advanceTimersByTimeAsync(45_000);
   const stopping = tunnel.stopAsync();
   expect(tunnel.stopAsync()).toBe(stopping);
-  const rejected = expect(stopping).rejects.toThrow('Ngrok tunnel stop timed out after 4000ms');
+  const rejected = expect(stopping).rejects.toThrow(
+    'Ngrok tunnel web-preview-fixed.example.test stop timed out after 4000ms'
+  );
   await jest.advanceTimersByTimeAsync(4_000);
   await rejected;
   expect(initial.close).toHaveBeenCalledTimes(1);
@@ -395,7 +452,9 @@ it('bounds a stalled listener close before reopening', async () => {
     expect(ngrok.forward).toHaveBeenCalledTimes(2);
   } finally {
     const stopping = tunnel.stopAsync();
-    const rejected = expect(stopping).rejects.toThrow('Ngrok tunnel stop timed out');
+    const rejected = expect(stopping).rejects.toThrow(
+      'Ngrok tunnel web-preview-fixed.example.test stop timed out'
+    );
     await jest.advanceTimersByTimeAsync(4_000);
     await rejected;
   }
