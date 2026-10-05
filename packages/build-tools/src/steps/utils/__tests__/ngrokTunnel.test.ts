@@ -63,6 +63,15 @@ function failPublicProbes() {
   );
 }
 
+it('keeps tunnels without a health check unsupervised and closes them on stop', async () => {
+  const tunnel = await startNgrokTunnelAsync({ ...options, healthCheck: undefined });
+  await jest.advanceTimersByTimeAsync(90_000);
+  expect(turtleFetch).not.toHaveBeenCalled();
+  expect(ngrok.forward).toHaveBeenCalledTimes(1);
+  await tunnel.stopAsync();
+  expect(initial.close).toHaveBeenCalledTimes(1);
+});
+
 it('probes the public service and keeps a healthy listener open', async () => {
   const tunnel = await startNgrokTunnelAsync(options);
   try {
@@ -326,6 +335,24 @@ it('retires an old listener even after its replacement is healthy', async () => 
   } finally {
     await tunnel.stopAsync();
   }
+});
+
+it('retries an old listener without repeating its close warning on every probe', async () => {
+  failPublicProbes();
+  initial.close.mockRejectedValue(new Error('old session disconnected'));
+  const tunnel = await startNgrokTunnelAsync(options);
+  await jest.advanceTimersByTimeAsync(45_000);
+  const warnings = jest.mocked(logger.warn).mock.calls.length;
+  expect(warnings).toBeGreaterThan(0);
+  jest.mocked(turtleFetch).mockResolvedValue(new Response(undefined, { status: 200 }));
+  await jest.advanceTimersByTimeAsync(120_000);
+  expect(initial.close.mock.calls.length).toBeGreaterThan(1);
+  expect(ngrok.forward).toHaveBeenCalledTimes(2);
+  expect(logger.warn).toHaveBeenCalledTimes(warnings);
+  const rejected = expect(tunnel.stopAsync()).rejects.toThrow('Ngrok tunnel stop timed out');
+  await jest.advanceTimersByTimeAsync(4_000);
+  await rejected;
+  expect(replacement.close).toHaveBeenCalledTimes(1);
 });
 
 it('retries a rejected close during shutdown', async () => {

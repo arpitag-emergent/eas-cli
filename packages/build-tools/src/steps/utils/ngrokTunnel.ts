@@ -51,7 +51,7 @@ export async function startNgrokTunnelAsync({
 
   async function closeAsync(
     listener: ngrok.Listener,
-    closeSignal: AbortSignal | undefined,
+    closeSignal: AbortSignal,
     logFailure = true
   ): Promise<void> {
     retiredListeners.add(listener);
@@ -73,7 +73,7 @@ export async function startNgrokTunnelAsync({
         async () => await closing
       );
     } catch (err) {
-      if (logFailure && !closeSignal?.aborted) {
+      if (logFailure && !closeSignal.aborted) {
         logger.warn({ err }, `Could not stop ngrok tunnel ${domain}.`);
       }
     }
@@ -156,11 +156,10 @@ export async function startNgrokTunnelAsync({
 
   const url = publicUrl;
 
-  async function probeAsync(baseUrl: string): Promise<boolean> {
-    if (!healthCheck) {
-      return true;
-    }
-    const { path, statuses = [200] } = healthCheck;
+  async function probeAsync(
+    baseUrl: string,
+    { path, statuses = [200] }: NonNullable<typeof healthCheck>
+  ): Promise<boolean> {
     try {
       return await withDeviceRunSessionTimeoutAsync(
         { name: 'Ngrok tunnel health probe', timeoutMs: 5_000, signal },
@@ -185,7 +184,7 @@ export async function startNgrokTunnelAsync({
     }
   }
 
-  async function superviseAsync(): Promise<void> {
+  async function superviseAsync(check: NonNullable<typeof healthCheck>): Promise<void> {
     let failures = 0;
     let attempts = 0;
     let localUnhealthy = false;
@@ -197,11 +196,11 @@ export async function startNgrokTunnelAsync({
         signal
       )
     ) {
-      await Promise.all([...retiredListeners].map(retired => closeAsync(retired, signal)));
+      await Promise.all([...retiredListeners].map(retired => closeAsync(retired, signal, false)));
       if (signal.aborted) {
         return;
       }
-      if (listener && (await probeAsync(url))) {
+      if (listener && (await probeAsync(url, check))) {
         if (failures > 0 || attempts > 0 || localUnhealthy) {
           logger.info(`Ngrok tunnel ${domain} is healthy again.`);
         }
@@ -213,7 +212,7 @@ export async function startNgrokTunnelAsync({
       if (signal.aborted) {
         return;
       }
-      if (!(await probeAsync(`http://127.0.0.1:${port}`))) {
+      if (!(await probeAsync(`http://127.0.0.1:${port}`, check))) {
         if (!localUnhealthy && !signal.aborted) {
           logger.warn(
             `Local service on port ${port} is unhealthy; keeping ngrok tunnel ${domain}.`
@@ -259,7 +258,7 @@ export async function startNgrokTunnelAsync({
   }
 
   const supervision = healthCheck
-    ? superviseAsync().catch(err => {
+    ? superviseAsync(healthCheck).catch(err => {
         if (!signal.aborted) {
           logger.warn({ err }, `Ngrok tunnel supervision stopped for ${domain}.`);
         }

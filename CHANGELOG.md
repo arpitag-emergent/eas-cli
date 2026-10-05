@@ -8,7 +8,7 @@ This is the log of notable changes to EAS CLI and related packages.
 
 ### 🎉 New features
 
-- [build-tools] Supervise simulator session tunnels with health probes and reopen unhealthy endpoints at the same public URL. ([#4526](https://github.com/expo/eas-cli/pull/4526) by [@gwdp](https://github.com/gwdp))
+- [build-tools] Supervise device run session tunnels with health probes and reopen unhealthy endpoints at the same public URL. ([#4526](https://github.com/expo/eas-cli/pull/4526) by [@gwdp](https://github.com/gwdp))
 - [build-tools] Run serve-sim and the session controller in parallel with separate log phases. Fail a session if its tools tunnel or a tool process does not stop cleanly. ([#4525](https://github.com/expo/eas-cli/pull/4525) by [@gwdp](https://github.com/gwdp))
 
 ### 🐛 Bug fixes
