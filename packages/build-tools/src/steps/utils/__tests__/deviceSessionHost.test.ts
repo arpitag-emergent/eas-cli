@@ -177,6 +177,33 @@ it('uses the shorter startup deadline when a listening host never answers readin
   await rejected;
 });
 
+it('starts the readiness budget after refusals that exceed the normal startup deadline', async () => {
+  jest.useFakeTimers();
+  const startedAt = Date.now();
+  jest.mocked(turtleFetch).mockImplementation(async () => {
+    if (Date.now() - startedAt < 65_000) {
+      throw Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' });
+    }
+    throw Object.assign(new Error('network timeout'), { type: 'request-timeout' });
+  });
+  const waiting = waitForWebPreviewReadyAsync({
+    previewServer: { pid: undefined, getOutput: () => '' },
+    serverName: 'serve-sim',
+    port: 4321,
+    timeoutMs: 60_000,
+    bootTimeoutMs: 30 * 60_000,
+  });
+  let settled = false;
+  void waiting.catch(() => {
+    settled = true;
+  });
+  const rejected = expect(waiting).rejects.toThrow('network timeout');
+  await jest.advanceTimersByTimeAsync(65_000 + 59_000);
+  expect(settled).toBe(false);
+  await jest.advanceTimersByTimeAsync(1_000);
+  await rejected;
+});
+
 it('stops a host that became ready on a different Simulator', async () => {
   await expect(
     startDeviceSessionHostAsync(ctx, {

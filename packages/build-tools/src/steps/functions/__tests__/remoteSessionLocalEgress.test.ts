@@ -29,11 +29,13 @@ jest.mock('../../../utils/processes');
 jest.mock('../../../utils/turtleFetch');
 jest.mock('../../utils/deviceSessionHost');
 jest.mock('../../utils/agentDeviceArtifacts');
-// The agent-device session step boots the Simulator itself; this test covers local egress.
+// Local egress keeps the legacy boot path; ordinary agent-device sessions use serve-sim.
 jest.mock('../startIosSimulator', () => ({
   bootIosSimulatorAsync: jest
     .fn()
     .mockResolvedValue({ deviceIdentifier: 'sim', udid: 'sim', displayName: 'iPhone' }),
+  resolveIosSimulatorUdidAsync: jest.fn().mockResolvedValue('sim'),
+  prepareBootedIosSimulatorAsync: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../utils/argentArtifacts');
 jest.mock('../../utils/agentDeviceEvents', () => ({

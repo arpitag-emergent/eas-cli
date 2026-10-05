@@ -236,7 +236,7 @@ export async function waitForWebPreviewReadyAsync({
         signal,
       });
       if (!response.ok) {
-        throw new SystemError(`${serverName} readiness returned HTTP ${response.status}.`);
+        throw new SystemError(`${serverName} readiness returned HTTP ${response.status}`);
       }
       const ready = WebPreviewReadyResponseSchema.parse(await response.json());
       signal?.throwIfAborted();
