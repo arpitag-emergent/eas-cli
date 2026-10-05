@@ -716,7 +716,15 @@ describe('spawnDetached process group shutdown', () => {
 
   beforeEach(() => {
     const spawned = Object.assign(Promise.resolve(undefined), {
-      child: { pid: 4321, unref: jest.fn(), once: jest.fn() },
+      child: {
+        pid: 4321,
+        unref: jest.fn(),
+        once: jest.fn((event, callback) => {
+          if (event === 'close') {
+            queueMicrotask(callback);
+          }
+        }),
+      },
     });
     jest.mocked(spawn).mockReturnValue(spawned as never);
   });
@@ -751,7 +759,16 @@ describe('spawnDetached process group shutdown', () => {
   });
 
   it('kills a detached child that outlives the shutdown deadline', async () => {
-    const kill = jest.spyOn(process, 'kill').mockReturnValue(true);
+    let killed = false;
+    const kill = jest.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === -4321 && signal === 'SIGKILL') {
+        killed = true;
+      }
+      if (killed && signal === 0) {
+        throw Object.assign(new Error('Process group exited'), { code: 'ESRCH' });
+      }
+      return true;
+    });
 
     const detached = spawnDetached({ command: 'npx', args: [], env, stopGracePeriodMs: 0 });
     await detached.stopAsync();
