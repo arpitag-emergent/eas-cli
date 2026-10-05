@@ -523,6 +523,35 @@ it('retries a rejected close after initial tunnel creation timed out', async () 
   expect(initial.close).toHaveBeenCalledTimes(2);
 });
 
+it('retires only the late listener without blaming it for an older stuck listener', async () => {
+  failPublicProbes();
+  initial.close.mockRejectedValue(new Error('old session disconnected'));
+  let resolveOpening!: (value: ngrok.Listener) => void;
+  jest
+    .mocked(ngrok.forward)
+    .mockReset()
+    .mockResolvedValueOnce(initial as never)
+    .mockReturnValueOnce(new Promise(resolve => (resolveOpening = resolve)))
+    .mockResolvedValue(replacement as never);
+  const tunnel = await startNgrokTunnelAsync(options);
+  try {
+    await jest.advanceTimersByTimeAsync(60_000);
+    const late = listener();
+    resolveOpening(late as never);
+    jest.mocked(turtleFetch).mockResolvedValue(new Response(undefined, { status: 200 }));
+    await jest.advanceTimersByTimeAsync(4_000);
+    expect(late.close).toHaveBeenCalledTimes(1);
+    expect(
+      jest
+        .mocked(logger.warn)
+        .mock.calls.some(([, message]) => message?.includes('Could not retire late'))
+    ).toBe(false);
+  } finally {
+    initial.close.mockResolvedValue(undefined);
+    await tunnel.stopAsync();
+  }
+});
+
 it('recovers using actual HTTP health probes with a local ngrok adapter', async () => {
   const actualFetch = jest.requireActual<typeof import('node-fetch')>('node-fetch').default;
   const realSetTimeout = jest.requireActual<typeof import('node:timers')>('node:timers').setTimeout;

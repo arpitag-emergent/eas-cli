@@ -96,7 +96,15 @@ export async function startNgrokTunnelAsync({
     try {
       await withDeviceRunSessionTimeoutAsync(
         { name: 'Late ngrok tunnel retirement', timeoutMs: STOP_TIMEOUT_MS },
-        retireListenersAsync
+        async retirementSignal => {
+          while (retiredListeners.has(listener)) {
+            retirementSignal.throwIfAborted();
+            await closeAsync(listener, retirementSignal, false);
+            if (retiredListeners.has(listener)) {
+              await waitAsync(250, retirementSignal);
+            }
+          }
+        }
       );
     } catch (err) {
       logger.warn({ err }, `Could not retire late ngrok tunnel ${domain}.`);
@@ -149,10 +157,10 @@ export async function startNgrokTunnelAsync({
   }
 
   logger.info(`Starting ngrok tunnel ${domain} -> http://localhost:${port}.`);
-  let listener: ngrok.Listener | undefined = await openAsync();
-  const publicUrl = listener.url();
+  let currentListener: ngrok.Listener | undefined = await openAsync();
+  const publicUrl = currentListener.url();
   if (!publicUrl) {
-    await closeAsync(listener, signal);
+    await closeAsync(currentListener, signal);
     throw new SystemError(`ngrok tunnel for ${domain} did not return a public URL.`);
   }
 
@@ -192,7 +200,7 @@ export async function startNgrokTunnelAsync({
     let localUnhealthy = false;
     while (
       await waitAsync(
-        listener || localUnhealthy
+        currentListener || localUnhealthy
           ? PROBE_INTERVAL_MS
           : Math.min(1_000 * 2 ** Math.min(attempts, 5), 30_000),
         signal
@@ -202,7 +210,7 @@ export async function startNgrokTunnelAsync({
       if (signal.aborted) {
         return;
       }
-      if (listener && (await probeAsync(url, check))) {
+      if (currentListener && (await probeAsync(url, check))) {
         if (failures > 0 || attempts > 0 || localUnhealthy) {
           logger.info(`Ngrok tunnel ${domain} is healthy again.`);
         }
@@ -225,14 +233,14 @@ export async function startNgrokTunnelAsync({
         continue;
       }
       localUnhealthy = false;
-      if (listener) {
+      if (currentListener) {
         failures++;
         if (failures < FAILURE_THRESHOLD) {
           continue;
         }
         logger.warn(`Ngrok tunnel ${domain} failed ${failures} health probes; reopening it.`);
-        await closeAsync(listener, signal);
-        listener = undefined;
+        await closeAsync(currentListener, signal);
+        currentListener = undefined;
       }
       if (signal.aborted) {
         return;
@@ -246,7 +254,7 @@ export async function startNgrokTunnelAsync({
             `Reopened ngrok tunnel for ${domain} returned a different public URL.`
           );
         }
-        listener = reopened;
+        currentListener = reopened;
         failures = 0;
       } catch (err) {
         if (!signal.aborted && (attempts === 1 || attempts % 5 === 0)) {
@@ -278,9 +286,9 @@ export async function startNgrokTunnelAsync({
           async stopSignal => {
             await supervision;
             await pendingOpen?.catch(() => {});
-            if (listener) {
-              retiredListeners.add(listener);
-              listener = undefined;
+            if (currentListener) {
+              retiredListeners.add(currentListener);
+              currentListener = undefined;
             }
             await retireListenersAsync(stopSignal);
           }
