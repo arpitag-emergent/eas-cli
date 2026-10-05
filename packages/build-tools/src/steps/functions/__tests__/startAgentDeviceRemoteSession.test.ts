@@ -137,10 +137,15 @@ describe(startAgentDeviceDaemonAsync, () => {
   });
 
   it('kills the install and does not fall back to git when aborted', async () => {
+    let installStarted!: () => void;
+    const started = new Promise<void>(resolve => {
+      installStarted = resolve;
+    });
     jest.mocked(spawn).mockImplementation(
       ((_command: string, _args: string[], options?: { signal?: AbortSignal }) =>
         new Promise((_resolve, reject) => {
           options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason));
+          installStarted();
         })) as never
     );
     const controller = new AbortController();
@@ -152,7 +157,7 @@ describe(startAgentDeviceDaemonAsync, () => {
       logger,
       signal: controller.signal,
     });
-    await new Promise(resolve => setImmediate(resolve));
+    await started;
     controller.abort(failure);
 
     await expect(daemon).rejects.toBe(failure);

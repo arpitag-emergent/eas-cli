@@ -497,9 +497,6 @@ async function startDeviceSessionHostInPhaseAsync(
     hostReady = true;
     if (!isAndroid) {
       previewToken = await readServeSimPreviewTokenAsync(device);
-      if (previewToken) {
-        secrets.push(previewToken);
-      }
       if (!previewToken) {
         throw new SystemError(
           `serve-sim became ready but wrote no session token for device ${device}. The preview is ` +
@@ -508,6 +505,7 @@ async function startDeviceSessionHostInPhaseAsync(
             'report it if it repeats.'
         );
       }
+      secrets.push(previewToken);
       IosSimulatorRecordingUtils.useServeSimPackage(packageSpec);
     }
     return host;

@@ -14,7 +14,7 @@ import {
   uploadDeviceRunSessionScreenRecordingsAsync,
 } from '../deviceRunSessionScreenRecordings';
 import { startDeviceSessionHostAsync } from '../deviceSessionHost';
-import { spawnDetached } from '../remoteDeviceRunSession';
+import { fetchWebPreviewTurnArgsAsync, spawnDetached } from '../remoteDeviceRunSession';
 
 jest.mock('@ngrok/ngrok');
 jest.mock('../deviceRunSessionArtifacts');
@@ -467,6 +467,53 @@ it('leaves iOS recording to its existing build steps', async () => {
   expect(stopServer).toHaveBeenCalledTimes(1);
 });
 
+const turnArgs = [
+  '--turn-url',
+  'turn:turn.example.test:3478',
+  '--turn-username',
+  'turn-user',
+  '--turn-credential',
+  'turn-secret',
+];
+
+it('passes the TURN credential and the Android control token to the host as secrets', async () => {
+  jest.mocked(fetchWebPreviewTurnArgsAsync).mockResolvedValueOnce(turnArgs);
+  const host = await startHostAsync();
+  const options = jest.mocked(spawnDetached).mock.calls[0][0];
+  const controlToken = options.env.EXPO_DEVICE_HUB_RECORDING_CONTROL_TOKEN;
+  expect(controlToken).toMatch(/^[a-f0-9]{64}$/);
+  expect(options.secrets).toEqual(['turn-secret', controlToken]);
+  await host.finishAsync();
+});
+
+it('adds the iOS preview token to the host secrets once serve-sim is ready', async () => {
+  jest.mocked(fetchWebPreviewTurnArgsAsync).mockResolvedValueOnce(turnArgs);
+  let secretsAtSpawn: string[] | undefined;
+  jest.mocked(spawnDetached).mockImplementationOnce(options => {
+    secretsAtSpawn = [...(options.secrets ?? [])];
+    return {
+      pid: undefined,
+      getOutput: () => '',
+      getExitError: () => undefined,
+      stopAsync: stopServer,
+    };
+  });
+  const host = await startDeviceSessionHostAsync(ctx, {
+    runtimePlatform: BuildRuntimePlatform.DARWIN,
+    env,
+    logger,
+    timeoutMs: 10_000,
+  });
+  expect(secretsAtSpawn).toEqual(['turn-secret']);
+  // Host output is redacted against this array, so the token must land in the one passed at spawn.
+  expect(jest.mocked(spawnDetached).mock.calls[0][0].secrets).toEqual([
+    'turn-secret',
+    'preview-token',
+  ]);
+  expect((await host.openPreviewAsync({ baseDomain })).previewToken).toBe('preview-token');
+  await host.finishAsync();
+});
+
 it('keeps the preview phase open until shutdown output has been logged', async () => {
   const previewLogger = { info: jest.fn(), warn: jest.fn() } as unknown as bunyan;
   jest.mocked(logger.child).mockReturnValueOnce(previewLogger);
@@ -514,6 +561,48 @@ it('ends the preview phase with failure when the host cannot stop', async () => 
   await host.finishAsync();
   expect(logger.info).toHaveBeenLastCalledWith(
     { marker: LogMarker.END_PHASE, result: BuildPhaseResult.FAIL },
+    'End phase: Simulator preview'
+  );
+});
+
+it.each([
+  ['exited during the session', true, BuildPhaseResult.FAIL],
+  ['exited only when stopped', false, BuildPhaseResult.SUCCESS],
+])('finishes cleanup and uploads when the host %s', async (_description, exitedEarly, result) => {
+  let exitError: Error | undefined;
+  jest.mocked(spawnDetached).mockImplementationOnce(options => {
+    directories.push(options.args[options.args.indexOf('--android-recording-directory') + 1]);
+    return {
+      pid: undefined,
+      getOutput: () => '',
+      getExitError: () => exitError,
+      stopAsync: stopServer,
+    };
+  });
+  stopServer.mockImplementationOnce(async () => {
+    exitError ??= new Error('Process exited with signal SIGTERM.');
+  });
+  const host = await startHostAsync();
+  await host.openPreviewAsync({ baseDomain });
+  const directory = directories[0];
+  await writeRecordingDescriptorAsync(directory);
+  jest.mocked(uploadDeviceRunSessionScreenRecordingsAsync).mockResolvedValueOnce(true);
+  const screenshotDirectory =
+    jest.mocked(spawnDetached).mock.calls[0][0].env.EXPO_DEVICE_HUB_SCREENSHOT_DIRECTORY;
+  if (!screenshotDirectory) {
+    throw new Error('Missing screenshot artifact directory');
+  }
+  if (exitedEarly) {
+    exitError = new Error('Process exited with code 1.');
+  }
+  await host.finishAsync();
+  expect(closeTunnel).toHaveBeenCalledTimes(1);
+  expect(stopServer).toHaveBeenCalledTimes(1);
+  expect(uploadDeviceRunSessionScreenRecordingsAsync).toHaveBeenCalledTimes(1);
+  await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(access(screenshotDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(logger.info).toHaveBeenLastCalledWith(
+    { marker: LogMarker.END_PHASE, result },
     'End phase: Simulator preview'
   );
 });

@@ -81,6 +81,32 @@ it('omits overlong lines completely and keeps logging the following diagnostics'
   expect(output.getOutput()).not.toContain('secret');
 });
 
+it('splits multi-line and CRLF chunks and keeps a line exactly at the length limit', () => {
+  const output = createProcessOutput(logger);
+  const limit = 16 * 1024;
+  output.stdout.append('first\r\nsecond\nthi');
+  output.stdout.append('rd\n' + 'x'.repeat(limit - 1));
+  output.stdout.append('x\n' + 'y'.repeat(limit) + 'y\nafter');
+  output.finish();
+  expect(jest.mocked(logger.info).mock.calls.map(([, line]) => line)).toEqual([
+    'first',
+    'second',
+    'third',
+    'x'.repeat(limit),
+    '[Overlong output line omitted.]',
+    'after',
+  ]);
+});
+
+it('keeps unfinished stdout and stderr lines apart in diagnostics', () => {
+  const output = createProcessOutput(logger);
+  output.stdout.append('done\nDownloading 45%');
+  output.stderr.append('fatal: port in use');
+  expect(output.getOutput()).toBe('done\nDownloading 45%\nfatal: port in use');
+  output.stdout.append('\n');
+  expect(output.getOutput()).toBe('done\nDownloading 45%\nfatal: port in use');
+});
+
 it('redacts final partial lines and bounds diagnostics without capping live output', () => {
   const output = createProcessOutput(logger);
   for (let index = 0; index < 100; index++) {

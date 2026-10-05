@@ -17,7 +17,7 @@ This is the log of notable changes to EAS CLI and related packages.
 ### 🎉 New features
 
 - [build-tools] Record iOS Simulator sessions through serve-sim. ([#4474](https://github.com/expo/eas-cli/pull/4474) by [@gwdp](https://github.com/gwdp))
-- [build-tools] Show simulator preview output live in a separate log phase alongside the remote session. ([#4525](https://github.com/expo/eas-cli/pull/4525) by [@gwdp](https://github.com/gwdp))
+- [build-tools] Show simulator preview output live in a separate log phase alongside the remote session. A remote session that otherwise succeeds now fails if its tools tunnel or a tool process does not stop cleanly. ([#4525](https://github.com/expo/eas-cli/pull/4525) by [@gwdp](https://github.com/gwdp))
 - [eas-cli] Add browser device login with resumable commands for chat agents. ([#4502](https://github.com/expo/eas-cli/pull/4502) by [@eiiot](https://github.com/eiiot))
 - [build-tools] Upload the display rotation agent-device reports for a screenshot as device run session artifact metadata. ([#4508](https://github.com/expo/eas-cli/pull/4508) by [@szdziedzic](https://github.com/szdziedzic))
 

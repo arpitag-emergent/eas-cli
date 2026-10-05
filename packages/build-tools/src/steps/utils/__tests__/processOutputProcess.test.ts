@@ -91,3 +91,66 @@ it('drains descendant shutdown logs after the launcher has exited', async () => 
     await handle.stopAsync();
   }
 }, 20_000);
+
+it('fails a stop whose output a detached descendant still holds open, after flushing it', async () => {
+  const logger = { info: jest.fn() } as unknown as bunyan;
+  const lines = (source: string) =>
+    jest
+      .mocked(logger.info)
+      .mock.calls.filter(([fields]) => (fields as { source: string }).source === source)
+      .map(([, line]) => line as unknown as string);
+  // The descendant leaves the process group and keeps the inherited pipes until killed.
+  const escapedScript = `
+    process.stderr.on('error', () => {});
+    setInterval(() => console.error('escaped-tick'), 50);
+    setTimeout(() => process.exit(0), 30_000);
+  `;
+  const handle = spawnDetached({
+    command: process.execPath,
+    args: [
+      '-e',
+      `
+      const escaped = require('node:child_process').spawn(
+        process.execPath,
+        ['-e', ${JSON.stringify(escapedScript)}],
+        { stdio: 'inherit', detached: true }
+      );
+      console.error('escaped-pid ' + escaped.pid);
+      process.stdout.write('launcher partial');
+      setInterval(() => {}, 1000);
+    `,
+    ],
+    env: {},
+    logger,
+  });
+  let escapedPid: number | undefined;
+  try {
+    for (let tries = 0; tries < 100; tries++) {
+      const pidLine = lines('stderr').find(line => line.startsWith('escaped-pid '));
+      escapedPid = pidLine ? Number(pidLine.split(' ')[1]) : undefined;
+      if (escapedPid !== undefined && lines('stderr').includes('escaped-tick')) {
+        break;
+      }
+      await delay(20);
+    }
+    expect(escapedPid).toBeDefined();
+    expect(lines('stdout')).toEqual([]);
+
+    await expect(handle.stopAsync()).rejects.toThrow(
+      'Process output drain timed out after 5000ms.'
+    );
+    expect(handle.getExitError()?.message).toBe('Process exited with signal SIGTERM.');
+    expect(lines('stdout')).toEqual(['launcher partial']);
+    expect(handle.getOutput()).toContain('launcher partial');
+    const ticks = lines('stderr').length;
+    await delay(250);
+    expect(lines('stderr')).toHaveLength(ticks);
+  } finally {
+    if (escapedPid !== undefined) {
+      try {
+        process.kill(escapedPid, 'SIGKILL');
+      } catch {}
+    }
+    await handle.stopAsync().catch(() => {});
+  }
+}, 20_000);

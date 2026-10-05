@@ -1,11 +1,13 @@
 import { BuildRuntimePlatform, type BuildStepContext } from '@expo/steps';
 import spawn from '@expo/turtle-spawn';
+import * as ngrok from '@ngrok/ngrok';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { createGlobalContextMock } from '../../../__tests__/utils/context';
 import { type CustomBuildContext } from '../../../customBuildContext';
+import { Sentry } from '../../../sentry';
 import { startDeviceSessionHostAsync } from '../../utils/deviceSessionHost';
 import { isProcessDescendantOfAsync } from '../../../utils/processes';
 import { pollArgentArtifactsForUploadAsync } from '../../utils/argentArtifacts';
@@ -36,6 +38,7 @@ jest.mock('node:os', () => {
   };
 });
 jest.mock('@expo/turtle-spawn', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('@ngrok/ngrok');
 jest.mock('../../../sentry');
 jest.mock('../../../utils/processes', () => ({ isProcessDescendantOfAsync: jest.fn() }));
 jest.mock('../../utils/argentArtifacts', () => ({ pollArgentArtifactsForUploadAsync: jest.fn() }));
@@ -186,6 +189,70 @@ describe('createStartArgentRemoteSessionBuildFunction orchestration', () => {
       expect(mockTunnelStopAsync).toHaveBeenCalledTimes(1);
       expect(mockStopAsync).toHaveBeenCalledTimes(1);
       expect(jest.mocked(spawnDetached).mock.results[0].value.stopAsync).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    ['succeeded', false],
+    ['failed', true],
+  ])(
+    'fails after stopping the host and tools when the tools tunnel cannot close and the session %s',
+    async (_description, sessionFails) => {
+      const closeError = new Error('ngrok close failed');
+      const sessionError = new Error('session failed');
+      jest
+        .mocked(startNgrokTunnelAsync)
+        .mockImplementationOnce(
+          jest.requireActual('../../utils/remoteDeviceRunSession').startNgrokTunnelAsync
+        );
+      jest.mocked(ngrok.forward).mockResolvedValueOnce({
+        url: () => 'https://argent-abc.tunnel.example.com',
+        close: jest.fn().mockRejectedValue(closeError),
+      } as never);
+      if (sessionFails) {
+        jest.mocked(waitForDeviceRunSessionStoppedAsync).mockRejectedValueOnce(sessionError);
+      }
+      const logger = { info: jest.fn(), warn: jest.fn() };
+      const buildFunction = createStartArgentRemoteSessionBuildFunction({} as CustomBuildContext);
+      // The tunnel may still be serving, so its failure fails a session that otherwise succeeded.
+      await expect(
+        buildFunction.fn!(
+          {
+            logger,
+            global: { runtimePlatform: BuildRuntimePlatform.LINUX },
+          } as unknown as BuildStepContext,
+          {
+            inputs: {
+              package_version: { value: undefined },
+              max_idle_time_minutes: { value: undefined },
+            },
+            outputs: {},
+            env: {},
+          } as never
+        )
+      ).rejects.toBe(sessionFails ? sessionError : closeError);
+      expect(mockPreviewStopAsync).toHaveBeenCalledTimes(1);
+      expect(mockStopAsync).toHaveBeenCalledTimes(1);
+      expect(jest.mocked(spawnDetached).mock.results[0].value.stopAsync).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        { err: closeError },
+        expect.stringMatching(/^Could not stop ngrok tunnel argent-[a-f0-9]{32}\./)
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        { err: closeError },
+        'Could not stop the Argent tunnel during remote session teardown.'
+      );
+      expect(jest.mocked(Sentry.capture).mock.calls).toEqual(
+        sessionFails
+          ? [
+              [
+                'Could not stop the Argent tunnel after the remote session failed',
+                closeError,
+                { level: 'warning' },
+              ],
+            ]
+          : []
+      );
     }
   );
 

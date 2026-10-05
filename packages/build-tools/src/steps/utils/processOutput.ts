@@ -43,23 +43,19 @@ export function createProcessOutput(logger?: bunyan, secrets: string[] = []) {
       omitted = false;
     };
     const appendText = (text: string): void => {
-      let start = 0;
-      for (let index = 0; index <= text.length; index++) {
-        if (index < text.length && text[index] !== '\n') {
-          continue;
-        }
+      const parts = text.split('\n');
+      for (const [index, part] of parts.entries()) {
         if (!omitted) {
-          if (pending.length + index - start > MAX_LINE_CHARS) {
+          if (pending.length + part.length > MAX_LINE_CHARS) {
             pending = '';
             omitted = true;
           } else {
-            pending += text.slice(start, index);
+            pending += part;
           }
         }
-        if (index < text.length) {
+        if (index < parts.length - 1) {
           pending = pending.replace(/\r$/, '');
           publish();
-          start = index + 1;
         }
       }
     };
@@ -81,8 +77,12 @@ export function createProcessOutput(logger?: bunyan, secrets: string[] = []) {
     stderr: streams[1],
     finish: () => streams.forEach(stream => stream.finish()),
     getOutput: () =>
-      (redact(output) + streams.map(stream => stream.getPending()).join('')).slice(
-        -MAX_OUTPUT_CHARS
-      ),
+      (
+        redact(output) +
+        streams
+          .map(stream => stream.getPending())
+          .filter(Boolean)
+          .join('\n')
+      ).slice(-MAX_OUTPUT_CHARS),
   };
 }
