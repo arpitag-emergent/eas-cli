@@ -14,6 +14,8 @@ This is the log of notable changes to EAS CLI and related packages.
 
 ### 🧹 Chores
 
+- [build-tools] Let serve-sim boot the selected iOS Simulator for agent-device sessions without local egress. ([8be353ad](https://github.com/expo/eas-cli/commit/8be353adb4e52f5e0b9e23f532ac31078cff36d8) by [@gwdp](https://github.com/gwdp))
+
 ## [24.11.0](https://github.com/expo/eas-cli/releases/tag/v24.11.0) - 2026-10-05
 
 ### 🎉 New features
@@ -29,7 +31,6 @@ This is the log of notable changes to EAS CLI and related packages.
 
 ### 🧹 Chores
 
-- [build-tools] Let serve-sim boot the selected iOS Simulator for agent-device sessions without local egress. ([8be353ad](https://github.com/expo/eas-cli/commit/8be353adb4e52f5e0b9e23f532ac31078cff36d8) by [@gwdp](https://github.com/gwdp))
 - [build-tools] Remove the `eas/start_agent_device_remote_session` step; agent-device sessions use `eas/start_agent_device_session`. ([#4518](https://github.com/expo/eas-cli/pull/4518) by [@szdziedzic](https://github.com/szdziedzic))
 - [eas-cli] Report `eas-cli` as the request origin, and the coding agent when one is detected, when `eas simulator` creates a session, for analytics. ([#4523](https://github.com/expo/eas-cli/pull/4523) by [@sjkim-expo](https://github.com/sjkim-expo))
 
