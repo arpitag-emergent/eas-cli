@@ -1,6 +1,5 @@
 import { BuildRuntimePlatform, type BuildStepContext } from '@expo/steps';
 import spawn from '@expo/turtle-spawn';
-import * as ngrok from '@ngrok/ngrok';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,7 +37,6 @@ jest.mock('node:os', () => {
   };
 });
 jest.mock('@expo/turtle-spawn', () => ({ __esModule: true, default: jest.fn() }));
-jest.mock('@ngrok/ngrok');
 jest.mock('../../../sentry');
 jest.mock('../../../utils/processes', () => ({ isProcessDescendantOfAsync: jest.fn() }));
 jest.mock('../../utils/argentArtifacts', () => ({ pollArgentArtifactsForUploadAsync: jest.fn() }));
@@ -123,18 +121,21 @@ describe('createStartArgentRemoteSessionBuildFunction orchestration', () => {
     await fs.promises.rm(TEST_HOME, { recursive: true, force: true });
   });
 
-  it('reports an early exit with output before opening tunnels or publishing readiness', async () => {
+  it('reports an early exit with output and stops Argent before opening tunnels', async () => {
+    const stopError = new Error('drain timed out');
+    const stopServer = jest.fn().mockRejectedValue(stopError);
     jest.mocked(spawnDetached).mockReturnValue({
       pid: 4242,
       getOutput: () => 'could not bind server port',
       getExitError: () => new Error('process exited with code 1'),
-      stopAsync: jest.fn(),
+      stopAsync: stopServer,
     });
+    const logger = { info: jest.fn(), warn: jest.fn() };
     const buildFunction = createStartArgentRemoteSessionBuildFunction({} as CustomBuildContext);
     await expect(
       buildFunction.fn!(
         {
-          logger: { info: jest.fn(), warn: jest.fn() },
+          logger,
           global: { runtimePlatform: BuildRuntimePlatform.LINUX },
         } as unknown as BuildStepContext,
         {
@@ -149,9 +150,64 @@ describe('createStartArgentRemoteSessionBuildFunction orchestration', () => {
     ).rejects.toThrow(
       'Argent exited before becoming ready: process exited with code 1\nArgent tool-server output:\ncould not bind server port'
     );
+    expect(stopServer).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: stopError },
+      'Could not stop the Argent tool-server during remote session teardown.'
+    );
+    expect(pollArgentArtifactsForUploadAsync).not.toHaveBeenCalled();
     expect(startNgrokTunnelAsync).not.toHaveBeenCalled();
     expect(uploadRemoteSessionConfigAsync).not.toHaveBeenCalled();
     expect(startArgentEventCollectionAsync).not.toHaveBeenCalled();
+  });
+
+  it('drains artifact polling and stops the tool-server when event collection cannot start', async () => {
+    const collectionError = new Error('event collection failed');
+    const stopError = new Error('drain timed out');
+    let pollingFinished = false;
+    jest
+      .mocked(pollArgentArtifactsForUploadAsync)
+      .mockImplementationOnce(async (_ctx, { signal }) => {
+        await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+        pollingFinished = true;
+      });
+    jest.mocked(startArgentEventCollectionAsync).mockRejectedValueOnce(collectionError);
+    const stopServer = jest.fn(async () => {
+      expect(pollingFinished).toBe(true);
+      throw stopError;
+    });
+    jest.mocked(spawnDetached).mockReturnValueOnce({
+      pid: 4242,
+      getOutput: () => '',
+      getExitError: () => undefined,
+      stopAsync: stopServer,
+    });
+    const logger = { info: jest.fn(), warn: jest.fn() };
+    const buildFunction = createStartArgentRemoteSessionBuildFunction({} as CustomBuildContext);
+    await expect(
+      buildFunction.fn!(
+        {
+          logger,
+          global: { runtimePlatform: BuildRuntimePlatform.LINUX },
+        } as unknown as BuildStepContext,
+        {
+          inputs: {
+            package_version: { value: undefined },
+            max_idle_time_minutes: { value: undefined },
+          },
+          outputs: {},
+          env: {},
+        } as never
+      )
+    ).rejects.toBe(collectionError);
+    expect(pollingFinished).toBe(true);
+    expect(stopServer).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: stopError },
+      'Could not stop the Argent tool-server during remote session teardown.'
+    );
+    expect(startNgrokTunnelAsync).not.toHaveBeenCalled();
+    expect(startDeviceSessionHostAsync).not.toHaveBeenCalled();
   });
 
   it.each(['preview', 'config', 'wait'])(
@@ -200,15 +256,7 @@ describe('createStartArgentRemoteSessionBuildFunction orchestration', () => {
     async (_description, sessionFails) => {
       const closeError = new Error('ngrok close failed');
       const sessionError = new Error('session failed');
-      jest
-        .mocked(startNgrokTunnelAsync)
-        .mockImplementationOnce(
-          jest.requireActual('../../utils/remoteDeviceRunSession').startNgrokTunnelAsync
-        );
-      jest.mocked(ngrok.forward).mockResolvedValueOnce({
-        url: () => 'https://argent-abc.tunnel.example.com',
-        close: jest.fn().mockRejectedValue(closeError),
-      } as never);
+      mockTunnelStopAsync.mockRejectedValueOnce(closeError);
       if (sessionFails) {
         jest.mocked(waitForDeviceRunSessionStoppedAsync).mockRejectedValueOnce(sessionError);
       }
@@ -231,13 +279,10 @@ describe('createStartArgentRemoteSessionBuildFunction orchestration', () => {
           } as never
         )
       ).rejects.toBe(sessionFails ? sessionError : closeError);
+      expect(mockTunnelStopAsync).toHaveBeenCalledTimes(1);
       expect(mockPreviewStopAsync).toHaveBeenCalledTimes(1);
       expect(mockStopAsync).toHaveBeenCalledTimes(1);
       expect(jest.mocked(spawnDetached).mock.results[0].value.stopAsync).toHaveBeenCalledTimes(1);
-      expect(logger.warn).toHaveBeenCalledWith(
-        { err: closeError },
-        expect.stringMatching(/^Could not stop ngrok tunnel argent-[a-f0-9]{32}\./)
-      );
       expect(logger.warn).toHaveBeenCalledWith(
         { err: closeError },
         'Could not stop the Argent tunnel during remote session teardown.'

@@ -303,8 +303,11 @@ export async function startAgentDeviceDaemonAsync({
     return {
       ...daemonProcess,
       stopAsync: async () => {
-        await daemonProcess.stopAsync();
-        await fs.promises.rm(installDir, { recursive: true, force: true });
+        try {
+          await daemonProcess.stopAsync();
+        } finally {
+          await fs.promises.rm(installDir, { recursive: true, force: true });
+        }
       },
     };
   } catch (err) {

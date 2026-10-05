@@ -192,53 +192,55 @@ export function createStartArgentRemoteSessionBuildFunction(
         );
       }
 
-      logger.info(`Waiting for argent tool-server state in ${ARGENT_STATE_DIR}.`);
-      let toolServerPort: number;
-      let toolServerToken: string | undefined;
-      try {
-        const toolServerState = await waitForArgentToolServerStateAsync({
-          stateDir: ARGENT_STATE_DIR,
-          ancestorPid: argentServer.pid,
-          timeoutMs: STARTUP_TIMEOUT_MS,
-          getExitError: argentServer.getExitError,
-        });
-        toolServerPort = toolServerState.port;
-        toolServerToken = toolServerState.token;
-        if (toolServerToken) {
-          secrets.push(toolServerToken);
-        }
-      } catch (err) {
-        const output = argentServer.getOutput();
-        throw new SystemError(
-          `${
-            err instanceof Error ? err.message : `Timed out waiting for argent tool-server state.`
-          }${output ? `\nArgent tool-server output:\n${output}` : ''}`
-        );
-      }
-      logger.info(`Argent tool-server is listening on port ${toolServerPort}.`);
       const artifactPollAbortController = new AbortController();
-      const artifactPollSignal = signal
-        ? AbortSignal.any([signal, artifactPollAbortController.signal])
-        : artifactPollAbortController.signal;
-      const artifactPollingPromise = pollArgentArtifactsForUploadAsync(ctx, {
-        deviceRunSessionId,
-        toolsUrl: `http://127.0.0.1:${toolServerPort}`,
-        toolsAuthToken: toolServerToken,
-        logger,
-        signal: artifactPollSignal,
-      });
-
-      const eventCollection = await startArgentEventCollectionAsync({
-        ctx,
-        deviceRunSessionId,
-        eventLogPath: ARGENT_EVENT_LOG_PATH,
-        logger,
-      });
-
+      let artifactPollingPromise: Promise<void> | undefined;
+      let eventCollection: Awaited<ReturnType<typeof startArgentEventCollectionAsync>> | undefined;
       let toolsTunnel: Awaited<ReturnType<typeof startNgrokTunnelAsync>> | undefined;
       let sessionHost: DeviceSessionHost | undefined;
       let sessionFailed = false;
       try {
+        logger.info(`Waiting for argent tool-server state in ${ARGENT_STATE_DIR}.`);
+        let toolServerPort: number;
+        let toolServerToken: string | undefined;
+        try {
+          const toolServerState = await waitForArgentToolServerStateAsync({
+            stateDir: ARGENT_STATE_DIR,
+            ancestorPid: argentServer.pid,
+            timeoutMs: STARTUP_TIMEOUT_MS,
+            getExitError: argentServer.getExitError,
+          });
+          toolServerPort = toolServerState.port;
+          toolServerToken = toolServerState.token;
+          if (toolServerToken) {
+            secrets.push(toolServerToken);
+          }
+        } catch (err) {
+          const output = argentServer.getOutput();
+          throw new SystemError(
+            `${
+              err instanceof Error ? err.message : `Timed out waiting for argent tool-server state.`
+            }${output ? `\nArgent tool-server output:\n${output}` : ''}`
+          );
+        }
+        logger.info(`Argent tool-server is listening on port ${toolServerPort}.`);
+        const artifactPollSignal = signal
+          ? AbortSignal.any([signal, artifactPollAbortController.signal])
+          : artifactPollAbortController.signal;
+        artifactPollingPromise = pollArgentArtifactsForUploadAsync(ctx, {
+          deviceRunSessionId,
+          toolsUrl: `http://127.0.0.1:${toolServerPort}`,
+          toolsAuthToken: toolServerToken,
+          logger,
+          signal: artifactPollSignal,
+        });
+
+        eventCollection = await startArgentEventCollectionAsync({
+          ctx,
+          deviceRunSessionId,
+          eventLogPath: ARGENT_EVENT_LOG_PATH,
+          logger,
+        });
+
         toolsTunnel = await startNgrokTunnelAsync({
           port: toolServerPort,
           subdomainPrefix: 'argent',
@@ -312,11 +314,13 @@ export function createStartArgentRemoteSessionBuildFunction(
               'Argent tool-server',
               (async () => {
                 try {
-                  await stopArgentEventCollectionSafelyAsync({
-                    eventCollection,
-                    deviceRunSessionId,
-                    logger,
-                  });
+                  if (eventCollection) {
+                    await stopArgentEventCollectionSafelyAsync({
+                      eventCollection,
+                      deviceRunSessionId,
+                      logger,
+                    });
+                  }
                   artifactPollAbortController.abort();
                   try {
                     await artifactPollingPromise;

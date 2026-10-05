@@ -122,6 +122,20 @@ describe(startAgentDeviceDaemonAsync, () => {
     await expect(fs.promises.access(addCwd)).rejects.toThrow();
   });
 
+  it('removes the install directory when the daemon cannot be stopped', async () => {
+    const stopError = new Error('drain timed out');
+    stopAsync.mockRejectedValueOnce(stopError);
+    const handle = await startAgentDeviceDaemonAsync({
+      packageVersion: '1.2.3',
+      env: {},
+      logger,
+    });
+    const addCwd = jest.mocked(spawn).mock.calls[0][2]?.cwd as string;
+
+    await expect(handle.stopAsync()).rejects.toBe(stopError);
+    await expect(fs.promises.access(addCwd)).rejects.toThrow();
+  });
+
   it('installs with npm when EAS_OVERRIDE_PACKAGE_MANAGER is npm', async () => {
     await startAgentDeviceDaemonAsync({
       packageVersion: undefined,
