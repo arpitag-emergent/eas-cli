@@ -199,7 +199,7 @@ export namespace IosSimulatorUtils {
     env: NodeJS.ProcessEnv;
   }): Promise<IosSimulatorUuid> {
     if (UDID_PATTERN.test(deviceIdentifier)) {
-      return deviceIdentifier as IosSimulatorUuid;
+      return deviceIdentifier.toUpperCase() as IosSimulatorUuid;
     }
     const devices = await getAvailableDevicesAsync({ env, filter: 'available' });
     const device = devices.find(candidate => candidate.name === deviceIdentifier);
@@ -272,37 +272,48 @@ export namespace IosSimulatorUtils {
   export async function waitForReadyAsync({
     udid,
     env,
+    signal,
   }: {
     udid: IosSimulatorUuid;
     env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
   }): Promise<void> {
     const readinessScreenshotPath = path.join(os.tmpdir(), 'eas-simulator-readiness.png');
-    await retryAsync(
-      async () => {
-        await spawn('xcrun', ['simctl', 'io', udid, 'screenshot', readinessScreenshotPath], {
-          env,
-        });
-      },
-      {
-        retryOptions: {
-          // There's 30 * 60 seconds in 30 minutes, which is the timeout.
-          retries: 30 * 60,
-          retryIntervalMs: 1_000,
+    try {
+      await retryAsync(
+        async () => {
+          await spawn('xcrun', ['simctl', 'io', udid, 'screenshot', readinessScreenshotPath], {
+            env,
+            ...(signal ? { signal } : {}),
+          });
         },
-      }
-    );
-    await fs.promises.rm(readinessScreenshotPath, { force: true });
+        {
+          ...(signal ? { signal } : {}),
+          retryOptions: {
+            // There's 30 * 60 seconds in 30 minutes, which is the timeout.
+            retries: 30 * 60,
+            retryIntervalMs: 1_000,
+          },
+        }
+      );
+    } finally {
+      await fs.promises.rm(readinessScreenshotPath, { force: true });
+    }
 
     // Wait for data migration to complete before declaring the simulator ready
     // Based on WebKit's approach: https://trac.webkit.org/changeset/231452/webkit
     await retryAsync(
       async () => {
-        const isDataMigrating = await isDataMigratorProcessRunning({ env });
+        const isDataMigrating = await isDataMigratorProcessRunning({
+          env,
+          ...(signal ? { signal } : {}),
+        });
         if (isDataMigrating) {
           throw new Error('com.apple.datamigrator still running');
         }
       },
       {
+        ...(signal ? { signal } : {}),
         retryOptions: {
           retries: 30 * 60,
           retryIntervalMs: 1_000,
@@ -314,31 +325,47 @@ export namespace IosSimulatorUtils {
   export async function disableApsdAsync({
     udid,
     env,
+    signal,
   }: {
     udid: IosSimulatorUuid;
     env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
   }): Promise<void> {
     const launchctlDomains = ['user/foreground', 'system'];
     let lastError: unknown;
 
     for (const domain of launchctlDomains) {
+      signal?.throwIfAborted();
       const service = `${domain}/com.apple.apsd`;
       try {
-        await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'disable', service], { env });
+        await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'disable', service], {
+          env,
+          ...(signal ? { signal } : {}),
+        });
 
         try {
           await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'bootout', service], {
             env,
+            ...(signal ? { signal } : {}),
           });
         } catch (err) {
+          signal?.throwIfAborted();
           // bootout can fail when apsd is already gone; verify the service state below.
           lastError = err;
         }
 
-        if (!(await isLaunchctlServiceLoadedAsync({ udid, env, serviceLabel: 'com.apple.apsd' }))) {
+        if (
+          !(await isLaunchctlServiceLoadedAsync({
+            udid,
+            env,
+            ...(signal ? { signal } : {}),
+            serviceLabel: 'com.apple.apsd',
+          }))
+        ) {
           return;
         }
       } catch (err) {
+        signal?.throwIfAborted();
         lastError = err;
       }
     }
@@ -478,14 +505,17 @@ export namespace IosSimulatorUtils {
    */
   export async function isDataMigratorProcessRunning({
     env,
+    signal,
   }: {
     env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
   }): Promise<boolean> {
     try {
-      const result = await spawn('ps', ['-eo', 'pid,comm'], { env });
+      const result = await spawn('ps', ['-eo', 'pid,comm'], { env, ...(signal ? { signal } : {}) });
 
       return result.stdout.includes('com.apple.datamigrator');
     } catch {
+      signal?.throwIfAborted();
       // If ps command fails, assume no data migration processes are running
       return false;
     }
@@ -500,14 +530,19 @@ function formatRuntimeDisplayName(runtimeIdentifier: string): string {
 async function isLaunchctlServiceLoadedAsync({
   udid,
   env,
+  signal,
   serviceLabel,
 }: {
   udid: IosSimulatorUuid;
   env: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   serviceLabel: string;
 }): Promise<boolean> {
   try {
-    await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'list', serviceLabel], { env });
+    await spawn('xcrun', ['simctl', 'spawn', udid, 'launchctl', 'list', serviceLabel], {
+      env,
+      ...(signal ? { signal } : {}),
+    });
     return true;
   } catch (err) {
     if (err instanceof Error && 'status' in err && (err as { status: unknown }).status === 113) {

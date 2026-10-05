@@ -225,6 +225,25 @@ describe('IosSimulatorUtils', () => {
   });
 
   describe(IosSimulatorUtils.waitForReadyAsync, () => {
+    it('cancels readiness polling with the original session failure', async () => {
+      const controller = new AbortController();
+      const failure = new Error('daemon failed');
+      jest.mocked(retryAsync).mockImplementationOnce(jest.requireActual('../retry').retryAsync);
+      mockedSpawn.mockImplementationOnce((_command, _args, options) => {
+        expect(options?.signal).toBe(controller.signal);
+        controller.abort(failure);
+        return Promise.reject(new Error('The operation was aborted')) as never;
+      });
+      await expect(
+        IosSimulatorUtils.waitForReadyAsync({
+          udid: 'test-udid' as any,
+          env: process.env,
+          signal: controller.signal,
+        })
+      ).rejects.toBe(failure);
+      expect(mockedSpawn).toHaveBeenCalledTimes(1);
+    });
+
     it('takes the readiness screenshot into a writable temp file, not /dev/null', async () => {
       await IosSimulatorUtils.waitForReadyAsync({
         udid: 'test-udid' as any,
@@ -390,6 +409,16 @@ describe('IosSimulatorUtils', () => {
   });
 
   describe(IosSimulatorUtils.resolveUdidAsync, () => {
+    it('canonicalizes lowercase UDIDs before passing them to serve-sim', async () => {
+      await expect(
+        IosSimulatorUtils.resolveUdidAsync({
+          deviceIdentifier: '8027f627-9534-4679-85bf-0f14aff228e8' as any,
+          env: process.env,
+        })
+      ).resolves.toBe('8027F627-9534-4679-85BF-0F14AFF228E8');
+      expect(mockedSpawn).not.toHaveBeenCalled();
+    });
+
     it('passes a udid through without listing devices', async () => {
       await expect(
         IosSimulatorUtils.resolveUdidAsync({

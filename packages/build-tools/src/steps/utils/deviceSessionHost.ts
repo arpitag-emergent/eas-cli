@@ -204,16 +204,19 @@ export async function waitForWebPreviewReadyAsync({
   serverName,
   port,
   timeoutMs,
+  bootTimeoutMs,
   signal,
 }: {
   previewServer: Pick<DetachedProcessHandle, 'pid' | 'getOutput'>;
   serverName: string;
   port: number;
   timeoutMs: number;
+  bootTimeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<string> {
   const readyUrl = `http://${WEB_PREVIEW_HOST}:${port}/readyz`;
-  const deadline = Date.now() + timeoutMs;
+  let deadline = Date.now() + (bootTimeoutMs ?? timeoutMs);
+  let receivedResponse = false;
   let lastError: unknown;
   while (Date.now() < deadline) {
     signal?.throwIfAborted();
@@ -228,8 +231,16 @@ export async function waitForWebPreviewReadyAsync({
       const response = await turtleFetch(readyUrl, 'GET', {
         retries: 0,
         timeout: 2_000,
+        shouldThrowOnNotOk: false,
         ...(signal ? { signal } : {}),
       });
+      if (!receivedResponse) {
+        receivedResponse = true;
+        deadline = Math.min(deadline, Date.now() + timeoutMs);
+      }
+      if (!response.ok) {
+        throw new SystemError(`${serverName} readiness returned HTTP ${response.status}.`);
+      }
       const ready = WebPreviewReadyResponseSchema.parse(await response.json());
       signal?.throwIfAborted();
       return ready.device;
@@ -284,6 +295,7 @@ type DeviceSessionHostOptions = {
   env: BuildStepEnv;
   logger: bunyan;
   timeoutMs: number;
+  bootTimeoutMs?: number;
   signal?: AbortSignal;
   packageVersion?: string;
   iosSimulatorUdid?: string;
@@ -319,6 +331,7 @@ async function startDeviceSessionHostInPhaseAsync(
     env,
     logger,
     timeoutMs,
+    bootTimeoutMs,
     signal,
     packageVersion,
     iosSimulatorUdid,
@@ -510,6 +523,7 @@ async function startDeviceSessionHostInPhaseAsync(
       serverName,
       port,
       timeoutMs,
+      bootTimeoutMs,
       signal,
     });
     if (iosSimulatorUdid && device.toLowerCase() !== iosSimulatorUdid.toLowerCase()) {

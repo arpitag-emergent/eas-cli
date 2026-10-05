@@ -13,7 +13,11 @@ import {
   findUnlistedDeviceScreenRecordingsAsync,
   uploadDeviceRunSessionScreenRecordingsAsync,
 } from '../deviceRunSessionScreenRecordings';
-import { createServeSimArgs, startDeviceSessionHostAsync } from '../deviceSessionHost';
+import {
+  createServeSimArgs,
+  startDeviceSessionHostAsync,
+  waitForWebPreviewReadyAsync,
+} from '../deviceSessionHost';
 import { fetchWebPreviewTurnArgsAsync, spawnDetached } from '../remoteDeviceRunSession';
 
 jest.mock('@ngrok/ngrok');
@@ -108,9 +112,52 @@ afterEach(async () => {
 });
 
 it('targets the selected Simulator in the serve-sim invocation', () => {
-  expect(createServeSimArgs({ port: 4321, iosSimulatorUdid: 'session-udid' })).toEqual(
-    expect.arrayContaining(['@expo/serve-sim@latest', 'session-udid', '--port', '4321'])
-  );
+  expect(createServeSimArgs({ port: 4321, iosSimulatorUdid: 'session-udid' }).slice(0, 4)).toEqual([
+    '@expo/serve-sim@latest',
+    'session-udid',
+    '--port',
+    '4321',
+  ]);
+});
+
+it('allows a cold boot to take longer than the normal host startup deadline', async () => {
+  jest.useFakeTimers();
+  const startedAt = Date.now();
+  const readyResponse = jest.mocked(turtleFetch).getMockImplementation()!;
+  jest.mocked(turtleFetch).mockImplementation(async (...args) => {
+    if (Date.now() - startedAt < 65_000) {
+      throw new Error('ECONNREFUSED');
+    }
+    return await readyResponse(...args);
+  });
+  const waiting = waitForWebPreviewReadyAsync({
+    previewServer: { pid: undefined, getOutput: () => '' },
+    serverName: 'serve-sim',
+    port: 4321,
+    timeoutMs: 60_000,
+    bootTimeoutMs: 30 * 60_000,
+  });
+  await jest.advanceTimersByTimeAsync(65_000);
+  await expect(waiting).resolves.toBe('emulator-5554');
+});
+
+it('uses the shorter startup deadline after a cold host starts responding', async () => {
+  jest.useFakeTimers();
+  jest.mocked(turtleFetch).mockResolvedValue({
+    ok: false,
+    status: 503,
+    json: async () => ({ status: 'starting' }),
+  } as Awaited<ReturnType<typeof turtleFetch>>);
+  const waiting = waitForWebPreviewReadyAsync({
+    previewServer: { pid: undefined, getOutput: () => '' },
+    serverName: 'serve-sim',
+    port: 4321,
+    timeoutMs: 60_000,
+    bootTimeoutMs: 30 * 60_000,
+  });
+  const rejected = expect(waiting).rejects.toThrow('HTTP 503');
+  await jest.advanceTimersByTimeAsync(60_000);
+  await rejected;
 });
 
 it('stops a host that became ready on a different Simulator', async () => {

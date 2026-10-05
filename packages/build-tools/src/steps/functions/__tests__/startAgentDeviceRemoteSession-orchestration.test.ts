@@ -315,6 +315,47 @@ describe('runAgentDeviceRemoteSessionAsync orchestration', () => {
       expect(uploadRemoteSessionConfigAsync).toHaveBeenCalledTimes(1);
     });
 
+    it('preserves a failed download when aborting daemon installation rejects first', async () => {
+      const failure = new Error('download failed: build not found');
+      const installStarted = deferred();
+      jest.mocked(spawn).mockImplementation((async (_command, _args, options) => {
+        return await new Promise((_resolve, reject) => {
+          options!.signal!.addEventListener(
+            'abort',
+            () => {
+              const error = new Error('The operation was aborted');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true }
+          );
+          installStarted.resolve();
+        });
+      }) as typeof spawn);
+      jest.mocked(startDeviceSessionHostAsync).mockImplementation(async (_ctx, { signal }) => {
+        return await new Promise((_resolve, reject) => {
+          signal!.addEventListener(
+            'abort',
+            () => {
+              setTimeout(() => reject(signal!.reason), 20);
+            },
+            { once: true }
+          );
+        });
+      });
+      const prepareApplicationAsync = jest.fn(async () => {});
+      const session = startSession(tasks => {
+        void tasks.run('build download', async () => {
+          await installStarted.promise;
+          throw failure;
+        });
+        return { iosSimulatorUdid: 'selected-udid', prepareApplicationAsync };
+      });
+      await expect(session).rejects.toBe(failure);
+      expect(prepareApplicationAsync).not.toHaveBeenCalled();
+      expect(uploadRemoteSessionConfigAsync).not.toHaveBeenCalled();
+    });
+
     it('starts the host on the selected Simulator before preparing the application', async () => {
       const hostReady = deferred();
       const appReady = deferred();
@@ -334,7 +375,8 @@ describe('runAgentDeviceRemoteSessionAsync orchestration', () => {
         ctx,
         expect.objectContaining({
           iosSimulatorUdid: 'selected-udid',
-          timeoutMs: 30 * 60_000,
+          timeoutMs: 60_000,
+          bootTimeoutMs: 30 * 60_000,
           signal: expect.any(AbortSignal),
         })
       );

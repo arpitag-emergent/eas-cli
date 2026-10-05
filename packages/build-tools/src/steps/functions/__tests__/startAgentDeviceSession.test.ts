@@ -230,6 +230,7 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
       udid: 'selected-udid',
       env: {},
       logger: expect.any(Object),
+      signal: expect.any(AbortSignal),
     });
     expect(jest.mocked(prepareBootedIosSimulatorAsync).mock.invocationCallOrder[0]).toBeLessThan(
       jest.mocked(installBuildAsync).mock.invocationCallOrder[0]

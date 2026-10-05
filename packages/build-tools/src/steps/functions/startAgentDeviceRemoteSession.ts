@@ -125,6 +125,8 @@ export async function runAgentDeviceRemoteSessionAsync(
   let sessionHost: DeviceSessionHost | undefined;
   let eventCollection: Awaited<ReturnType<typeof startAgentDeviceEventCollectionAsync>> | undefined;
   let sessionFailed = false;
+  const hostBootedDevice = 'iosSimulatorUdid' in device ? device : undefined;
+  const externallyBootedDevice = 'booted' in device ? device : undefined;
 
   // Each task stores what it started, so the teardown below can stop it even when
   // another task failed first.
@@ -157,23 +159,24 @@ export async function runAgentDeviceRemoteSessionAsync(
     return { ...daemonInfo, remoteSessionUrl: agentDeviceTunnel.url };
   });
   const sessionHostStartup = tasks.run('session host', async taskLogger => {
-    if ('booted' in device) {
-      await tasks.untilAborted(device.booted);
+    if (externallyBootedDevice) {
+      await tasks.untilAborted(externallyBootedDevice.booted);
     }
     tasks.signal.throwIfAborted();
     sessionHost = await startDeviceSessionHostAsync(ctx, {
       runtimePlatform,
       env,
       logger: taskLogger,
-      timeoutMs: 'iosSimulatorUdid' in device ? IOS_SIMULATOR_BOOT_TIMEOUT_MS : STARTUP_TIMEOUT_MS,
+      timeoutMs: STARTUP_TIMEOUT_MS,
+      ...(hostBootedDevice ? { bootTimeoutMs: IOS_SIMULATOR_BOOT_TIMEOUT_MS } : {}),
       signal: tasks.signal,
       networkCapture: capture.networkCapture,
       networkCaptureFields: capture.networkCaptureFields,
-      ...('iosSimulatorUdid' in device ? { iosSimulatorUdid: device.iosSimulatorUdid } : {}),
+      ...(hostBootedDevice ? { iosSimulatorUdid: hostBootedDevice.iosSimulatorUdid } : {}),
     });
     tasks.signal.throwIfAborted();
-    if ('prepareApplicationAsync' in device) {
-      await device.prepareApplicationAsync();
+    if (hostBootedDevice) {
+      await hostBootedDevice.prepareApplicationAsync();
       tasks.signal.throwIfAborted();
     }
     const webPreview = await sessionHost.openPreviewAsync({ baseDomain: ngrokTunnelDomain });
@@ -183,7 +186,7 @@ export async function runAgentDeviceRemoteSessionAsync(
     );
     return webPreview;
   });
-  const deviceReady = 'ready' in device ? device.ready : undefined;
+  const deviceReady = externallyBootedDevice?.ready;
 
   try {
     const [
@@ -193,7 +196,7 @@ export async function runAgentDeviceRemoteSessionAsync(
       (err: unknown) => {
         // Also aborts for a `device.ready` that does not come from `tasks.run`.
         tasks.abort(err);
-        throw err;
+        throw tasks.signal.reason;
       }
     );
     tasks.signal.throwIfAborted();

@@ -14,17 +14,23 @@ export async function retryAsync<T = void>(
   {
     retryOptions: { retries, retryIntervalMs },
     logger,
+    signal,
   }: {
     retryOptions: RetryOptions;
     logger?: bunyan;
+    signal?: AbortSignal;
   }
 ): Promise<T> {
   let attemptCount = -1;
   for (;;) {
+    signal?.throwIfAborted();
     try {
       attemptCount += 1;
-      return await fn(attemptCount);
+      const result = await fn(attemptCount);
+      signal?.throwIfAborted();
+      return result;
     } catch (err: any) {
+      signal?.throwIfAborted();
       logger?.debug(
         { err, stdout: err.stdout, stderr: err.stderr },
         `Retry attempt ${attemptCount}`

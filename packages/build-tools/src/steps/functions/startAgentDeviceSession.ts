@@ -166,6 +166,7 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
 
       try {
         if (isIos) {
+          // Select Xcode before serve-sim boots the device or any Simulator tools run.
           await selectXcodeDeveloperDirectoryAsync({ env, logger });
         }
         tasks.signal.throwIfAborted();
@@ -242,6 +243,7 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                   udid: iosSimulatorUdid,
                   env,
                   logger: taskLogger,
+                  signal: tasks.signal,
                 });
                 tasks.signal.throwIfAborted();
               }

@@ -158,17 +158,22 @@ export async function prepareBootedIosSimulatorAsync({
   udid,
   env,
   logger,
+  signal,
 }: {
   udid: IosSimulatorUuid;
   env: BuildStepEnv;
   logger: bunyan;
+  signal?: AbortSignal;
 }): Promise<void> {
+  signal?.throwIfAborted();
   try {
-    await IosSimulatorUtils.disableApsdAsync({ udid, env });
+    await IosSimulatorUtils.disableApsdAsync({ udid, env, ...(signal ? { signal } : {}) });
   } catch (err) {
+    signal?.throwIfAborted();
     logger.warn({ err }, 'Failed to disable apsd in the Simulator.');
   }
-  await IosSimulatorUtils.waitForReadyAsync({ udid, env });
+  signal?.throwIfAborted();
+  await IosSimulatorUtils.waitForReadyAsync({ udid, env, ...(signal ? { signal } : {}) });
 }
 
 export async function resolveIosSimulatorUdidAsync({
