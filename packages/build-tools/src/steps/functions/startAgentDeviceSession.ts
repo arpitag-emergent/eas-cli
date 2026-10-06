@@ -19,13 +19,16 @@ import {
 import { IosSimulatorName, IosSimulatorUuid } from '../../utils/IosSimulatorUtils';
 import { readLocalEgressHandoffAsync } from '../utils/localEgress';
 import { withLocalEgressSession } from '../utils/localEgressSession';
-import { selectXcodeDeveloperDirectoryAsync } from '../utils/remoteDeviceRunSession';
-import { type ServeSimLaunchOptions } from '../utils/remoteDeviceRunSession';
+import {
+  type ServeSimLaunchOptions,
+  selectXcodeDeveloperDirectoryAsync,
+} from '../utils/remoteDeviceRunSession';
 import {
   createNetworkCaptureInputProviders,
   parseNetworkCaptureInputs,
 } from '../utils/networkCaptureFields';
 import { createStartupTasks } from '../utils/startupTasks';
+import { validateServeSimLaunchOptions } from '../utils/serveSimAppLauncher';
 
 import { downloadBuildAsync } from './downloadBuild';
 import { installBuildAsync } from './installBuild';
@@ -151,6 +154,9 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
           'launch_args and open_url need an application: pass build_id or application_archive_url.'
         );
       }
+      if (isIos) {
+        validateServeSimLaunchOptions({ launchArgs, openUrl });
+      }
       const deviceIdentifier = inputs.device_identifier.value as string | undefined;
       const iosDeviceIdentifier = deviceIdentifier as
         | IosSimulatorUuid
@@ -231,8 +237,9 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
           : undefined;
 
         const prepareApplicationAsync = (): Promise<ServeSimLaunchOptions | void> => {
+          const applicationTaskName = isIos ? 'app install' : 'app install and launch';
           applicationReady = tasks.run(
-            downloaded ? 'app install and launch' : 'Simulator setup',
+            downloaded ? applicationTaskName : 'Simulator setup',
             async taskLogger => {
               if (booted) {
                 await tasks.untilAborted(booted);

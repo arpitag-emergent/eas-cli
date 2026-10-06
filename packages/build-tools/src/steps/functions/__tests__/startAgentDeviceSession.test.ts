@@ -1,4 +1,5 @@
 import { BuildRuntimePlatform, type BuildStepContext } from '@expo/steps';
+import { UserError } from '@expo/eas-build-job';
 import spawn from '@expo/turtle-spawn';
 
 import { createGlobalContextMock } from '../../../__tests__/utils/context';
@@ -601,6 +602,30 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
       'max_idle_time_minutes',
       'max_duration_seconds',
     ]);
+  });
+
+  it.each([
+    ['argument count', { launch_args: Array(257).fill('a') }],
+    ['argument length', { launch_args: ['a'.repeat(9000)] }],
+    ['NUL argument', { launch_args: ['a\u0000b'] }],
+    ['total UTF-8 bytes', { launch_args: Array(16).fill('😃'.repeat(4096)) }],
+    ['URL length', { open_url: `example://${'a'.repeat(8192)}` }],
+  ])('rejects iOS launch %s before startup work', async (_name, inputs) => {
+    const step = runStep(BuildRuntimePlatform.DARWIN, { build_id: 'build-id', ...inputs });
+    await expect(step).rejects.toBeInstanceOf(UserError);
+    expect(selectXcodeDeveloperDirectoryAsync).not.toHaveBeenCalled();
+    expect(resolveIosSimulatorUdidAsync).not.toHaveBeenCalled();
+    expect(bootIosSimulatorAsync).not.toHaveBeenCalled();
+    expect(downloadBuildAsync).not.toHaveBeenCalled();
+    expect(runAgentDeviceRemoteSessionAsync).not.toHaveBeenCalled();
+  });
+
+  it('keeps Android launch inputs on its existing direct path', async () => {
+    const launchArgs = ['a'.repeat(9000)];
+    await runStep(BuildRuntimePlatform.LINUX, { build_id: 'build-id', launch_args: launchArgs });
+    expect(launchApplicationAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimePlatform: BuildRuntimePlatform.LINUX, launchArgs })
+    );
   });
 
   it('passes network capture to the session', async () => {

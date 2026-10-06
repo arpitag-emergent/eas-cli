@@ -80,8 +80,8 @@ export function getAgentDeviceRemoteSessionEnvOrThrow(
  * reports the session as ready, and keeps it alive until it stops.
  *
  * The host boots an explicit iOS Simulator before preparing the app, or waits for
- * an externally booted device. Startup failures abort the other tasks; teardown
- * waits for their work before stopping every acquired resource.
+ * an externally booted device, then launches the installed iOS app. Startup failures
+ * abort the other tasks; teardown waits for their work before stopping every acquired resource.
  */
 export async function runAgentDeviceRemoteSessionAsync(
   ctx: CustomBuildContext,
@@ -179,11 +179,12 @@ export async function runAgentDeviceRemoteSessionAsync(
       iosSimulatorUdid: hostBootedDevice?.iosSimulatorUdid,
     });
     tasks.signal.throwIfAborted();
-    const launch = hostBootedDevice
-      ? await hostBootedDevice.prepareApplicationAsync()
-      : runtimePlatform === BuildRuntimePlatform.DARWIN
-        ? await tasks.untilAborted(externallyBootedDevice!.ready)
-        : undefined;
+    let launch: ServeSimLaunchOptions | void = undefined;
+    if (hostBootedDevice) {
+      launch = await hostBootedDevice.prepareApplicationAsync();
+    } else if (runtimePlatform === BuildRuntimePlatform.DARWIN) {
+      launch = await tasks.untilAborted(externallyBootedDevice!.ready);
+    }
     tasks.signal.throwIfAborted();
     if (launch) {
       taskLogger.info(describeServeSimLaunch(launch));
