@@ -20,6 +20,7 @@ import { IosSimulatorName, IosSimulatorUuid } from '../../utils/IosSimulatorUtil
 import { readLocalEgressHandoffAsync } from '../utils/localEgress';
 import { withLocalEgressSession } from '../utils/localEgressSession';
 import { selectXcodeDeveloperDirectoryAsync } from '../utils/remoteDeviceRunSession';
+import { type ServeSimLaunchOptions } from '../utils/remoteDeviceRunSession';
 import {
   createNetworkCaptureInputProviders,
   parseNetworkCaptureInputs,
@@ -48,7 +49,8 @@ const ANDROID_DEVICE_NAME = 'EasAndroidDevice01' as AndroidVirtualDeviceName;
 
 /**
  * Starts a device session, downloading the app alongside device and daemon startup.
- * On iOS without local egress, serve-sim boots the selected Simulator before app installation.
+ * On iOS, build-tools installs the app and serve-sim launches it. Without local egress,
+ * serve-sim also boots the selected Simulator before app installation.
  * iOS with local egress and Android keep their existing boot paths.
  */
 export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildContext): BuildFunction {
@@ -166,7 +168,7 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
       const onAbort = (): void => tasks.abort(signal!.reason);
       signal?.addEventListener('abort', onAbort, { once: true });
       let downloaded: Promise<string> | undefined;
-      let applicationReady: Promise<unknown> | undefined;
+      let applicationReady: Promise<ServeSimLaunchOptions | void> | undefined;
 
       try {
         if (isIos) {
@@ -228,7 +230,7 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
             })
           : undefined;
 
-        const prepareApplicationAsync = (): Promise<unknown> => {
+        const prepareApplicationAsync = (): Promise<ServeSimLaunchOptions | void> => {
           applicationReady = tasks.run(
             downloaded ? 'app install and launch' : 'Simulator setup',
             async taskLogger => {
@@ -260,6 +262,9 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                 iosSimulatorUdid,
               });
               tasks.signal.throwIfAborted();
+              if (isIos) {
+                return { launchAppIdentifier: applicationIdentifier, launchArgs, openUrl };
+              }
               await launchApplicationAsync({
                 applicationIdentifier,
                 activityName,
@@ -268,7 +273,6 @@ export function createStartAgentDeviceSessionBuildFunction(ctx: CustomBuildConte
                 runtimePlatform,
                 env,
                 logger: taskLogger,
-                iosSimulatorUdid,
               });
             }
           );

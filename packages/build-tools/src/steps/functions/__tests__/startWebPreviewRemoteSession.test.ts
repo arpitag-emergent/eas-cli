@@ -57,6 +57,7 @@ describe(createStartWebPreviewRemoteSessionBuildFunction, () => {
     jest.mocked(getNgrokTunnelDomainOrThrow).mockReturnValue('tunnel.example.com');
     jest.mocked(selectXcodeDeveloperDirectoryAsync).mockResolvedValue(undefined);
     jest.mocked(startDeviceSessionHostAsync).mockResolvedValue({
+      launchApplicationAsync: jest.fn().mockResolvedValue(undefined),
       openPreviewAsync: jest.fn().mockResolvedValue({
         previewPageUrl: 'https://expo.dev/simulator-preview/preview-id',
         apiUrl: 'https://web-preview.example.test',
@@ -71,6 +72,7 @@ describe(createStartWebPreviewRemoteSessionBuildFunction, () => {
 
   it('reports the session token when serve-sim minted one', async () => {
     jest.mocked(startDeviceSessionHostAsync).mockResolvedValue({
+      launchApplicationAsync: jest.fn().mockResolvedValue(undefined),
       openPreviewAsync: jest.fn().mockResolvedValue({
         previewPageUrl: 'https://expo.dev/simulator-preview/preview-id',
         apiUrl: 'https://web-preview.example.test',
@@ -99,6 +101,7 @@ describe(createStartWebPreviewRemoteSessionBuildFunction, () => {
     const error = new Error(`${phase} failed`);
     if (phase === 'preview') {
       jest.mocked(startDeviceSessionHostAsync).mockResolvedValueOnce({
+        launchApplicationAsync: jest.fn().mockResolvedValue(undefined),
         openPreviewAsync: jest.fn().mockRejectedValue(error),
         finishAsync: stopAsync,
       });

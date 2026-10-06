@@ -14,7 +14,7 @@ This is the log of notable changes to EAS CLI and related packages.
 
 ### 🧹 Chores
 
-- [build-tools] Let serve-sim boot the selected iOS Simulator for agent-device sessions without local egress. ([#4544](https://github.com/expo/eas-cli/pull/4544) by [@gwdp](https://github.com/gwdp))
+- [build-tools] Hand agent-device iOS app launches to serve-sim and let it boot sessions without local egress. ([#4544](https://github.com/expo/eas-cli/pull/4544) by [@gwdp](https://github.com/gwdp))
 
 ## [24.11.0](https://github.com/expo/eas-cli/releases/tag/v24.11.0) - 2026-10-05
 

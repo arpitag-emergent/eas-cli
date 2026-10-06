@@ -139,6 +139,7 @@ describe.each(controllers)('%s local egress', (_name, createFunction, controller
       closeAsync: jest.fn(),
     });
     jest.mocked(startDeviceSessionHostAsync).mockResolvedValue({
+      launchApplicationAsync: jest.fn().mockResolvedValue(undefined),
       openPreviewAsync: openPreview,
       finishAsync: stopPreview,
     });

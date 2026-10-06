@@ -120,6 +120,7 @@ describe('runAgentDeviceRemoteSessionAsync orchestration', () => {
       stopAsync: mockTunnelStopAsync,
     });
     jest.mocked(startDeviceSessionHostAsync).mockResolvedValue({
+      launchApplicationAsync: jest.fn().mockResolvedValue(undefined),
       openPreviewAsync: jest.fn().mockResolvedValue({
         previewPageUrl: 'https://expo.dev/simulator-preview/preview-id',
         apiUrl: 'https://web-preview.tunnel.example.com',
@@ -394,6 +395,68 @@ describe('runAgentDeviceRemoteSessionAsync orchestration', () => {
       expect(mockPreviewStopAsync).toHaveBeenCalledTimes(1);
     });
 
+    it('waits for serve-sim to launch before reporting readiness or opening the preview', async () => {
+      const launched = deferred();
+      const host = await jest.mocked(startDeviceSessionHostAsync).getMockImplementation()!(
+        ctx,
+        {} as never
+      );
+      jest.mocked(host.launchApplicationAsync).mockReturnValue(launched.promise);
+      const launch = {
+        launchAppIdentifier: 'dev.example.app',
+        launchArgs: ['--flag'],
+        openUrl: 'example://screen',
+      };
+      const session = startSession({
+        iosSimulatorUdid: 'selected-udid',
+        prepareApplicationAsync: async () => launch,
+      });
+      await flushAsync();
+      expect(host.launchApplicationAsync).toHaveBeenCalledWith(launch);
+      expect(host.openPreviewAsync).not.toHaveBeenCalled();
+      expect(uploadRemoteSessionConfigAsync).not.toHaveBeenCalled();
+      launched.resolve();
+      await session;
+      expect(host.openPreviewAsync).toHaveBeenCalledTimes(1);
+      expect(uploadRemoteSessionConfigAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('hands the installed guarded iOS app to the running serve-sim host', async () => {
+      const launch = {
+        launchAppIdentifier: 'dev.example.app',
+        launchArgs: ['--flag'],
+        openUrl: 'example://screen',
+      };
+      await startSession({ booted: Promise.resolve(), ready: Promise.resolve(launch) });
+      const host = await jest.mocked(startDeviceSessionHostAsync).getMockImplementation()!(
+        ctx,
+        {} as never
+      );
+      expect(host.launchApplicationAsync).toHaveBeenCalledWith(launch);
+    });
+
+    it('cleans up the daemon and host when the serve-sim launch fails', async () => {
+      const host = await jest.mocked(startDeviceSessionHostAsync).getMockImplementation()!(
+        ctx,
+        {} as never
+      );
+      const error = new Error('serve-sim launch failed');
+      jest.mocked(host.launchApplicationAsync).mockImplementation(async () => {
+        await flushAsync();
+        throw error;
+      });
+      await expect(
+        startSession({
+          iosSimulatorUdid: 'selected-udid',
+          prepareApplicationAsync: async () => ({ launchAppIdentifier: 'dev.example.app' }),
+        })
+      ).rejects.toBe(error);
+      expect(host.openPreviewAsync).not.toHaveBeenCalled();
+      expect(uploadRemoteSessionConfigAsync).not.toHaveBeenCalled();
+      expect(mockPreviewStopAsync).toHaveBeenCalledTimes(1);
+      expect(mockDaemonStopAsync).toHaveBeenCalledTimes(1);
+    });
+
     it('cleans up a host returned after cancellation without preparing the app', async () => {
       const hostReady = deferred();
       const controller = new AbortController();
@@ -512,7 +575,7 @@ describe('runAgentDeviceRemoteSessionAsync orchestration', () => {
       expect(uploadRemoteSessionConfigAsync).not.toHaveBeenCalled();
     });
 
-    it('stops the session host when the app fails while the daemon install hangs', async () => {
+    it('stops the session host when guarded iOS installation fails while the daemon install hangs', async () => {
       jest.mocked(spawn).mockImplementation(((
         command: string,
         args: string[],

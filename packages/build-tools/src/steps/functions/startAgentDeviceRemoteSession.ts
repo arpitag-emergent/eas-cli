@@ -1,6 +1,6 @@
 import { SystemError } from '@expo/eas-build-job';
 import { type bunyan } from '@expo/logger';
-import { type BuildRuntimePlatform, type BuildStepEnv } from '@expo/steps';
+import { BuildRuntimePlatform, type BuildStepEnv } from '@expo/steps';
 import spawn from '@expo/turtle-spawn';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,6 +22,8 @@ import { startAgentDeviceEventCollectionAsync } from '../utils/agentDeviceEvents
 import { type StartupTasks } from '../utils/startupTasks';
 import {
   type DetachedProcessHandle,
+  type ServeSimLaunchOptions,
+  describeServeSimLaunch,
   finishRemoteSessionAsync,
   getDeviceRunSessionIdOrThrow,
   getNgrokAuthtokenOrThrow,
@@ -107,8 +109,11 @@ export async function runAgentDeviceRemoteSessionAsync(
     capture: ReturnType<typeof parseNetworkCaptureInputs>;
     tasks: StartupTasks;
     device:
-      | { booted: Promise<unknown>; ready: Promise<unknown> }
-      | { iosSimulatorUdid: string; prepareApplicationAsync: () => Promise<unknown> };
+      | { booted: Promise<unknown>; ready: Promise<ServeSimLaunchOptions | void> }
+      | {
+          iosSimulatorUdid: string;
+          prepareApplicationAsync: () => Promise<ServeSimLaunchOptions | void>;
+        };
   }
 ): Promise<void> {
   signal?.throwIfAborted();
@@ -174,8 +179,15 @@ export async function runAgentDeviceRemoteSessionAsync(
       iosSimulatorUdid: hostBootedDevice?.iosSimulatorUdid,
     });
     tasks.signal.throwIfAborted();
-    if (hostBootedDevice) {
-      await hostBootedDevice.prepareApplicationAsync();
+    const launch = hostBootedDevice
+      ? await hostBootedDevice.prepareApplicationAsync()
+      : runtimePlatform === BuildRuntimePlatform.DARWIN
+        ? await tasks.untilAborted(externallyBootedDevice!.ready)
+        : undefined;
+    tasks.signal.throwIfAborted();
+    if (launch) {
+      taskLogger.info(describeServeSimLaunch(launch));
+      await sessionHost.launchApplicationAsync(launch);
       tasks.signal.throwIfAborted();
     }
     const webPreview = await sessionHost.openPreviewAsync({ baseDomain: ngrokTunnelDomain });

@@ -19,6 +19,9 @@ import {
   waitForWebPreviewReadyAsync,
 } from '../deviceSessionHost';
 import { fetchWebPreviewTurnArgsAsync, spawnDetached } from '../remoteDeviceRunSession';
+import { launchServeSimApplicationAsync } from '../serveSimAppLauncher';
+
+jest.mock('../serveSimAppLauncher');
 
 jest.mock('@ngrok/ngrok');
 jest.mock('../deviceRunSessionArtifacts');
@@ -118,6 +121,32 @@ it('targets the selected Simulator in the serve-sim invocation', () => {
     '--port',
     '4321',
   ]);
+});
+
+it('hands launch to the ready iOS host using its private token and device', async () => {
+  const signal = new AbortController().signal;
+  const host = await startDeviceSessionHostAsync(ctx, {
+    runtimePlatform: BuildRuntimePlatform.DARWIN,
+    env,
+    logger,
+    timeoutMs: 10_000,
+    signal,
+  });
+  const launch = {
+    launchAppIdentifier: 'dev.example.app',
+    launchArgs: ['--flag'],
+    openUrl: 'example://screen',
+  };
+  await host.launchApplicationAsync(launch);
+  expect(launchServeSimApplicationAsync).toHaveBeenCalledWith({
+    ...launch,
+    token: 'preview-token',
+    udid: 'emulator-5554',
+    port: expect.any(Number),
+    signal,
+  });
+  await host.finishAsync();
+  await expect(host.launchApplicationAsync(launch)).rejects.toThrow('running iOS session host');
 });
 
 it('allows a cold boot to take longer than the normal host startup deadline', async () => {

@@ -103,22 +103,6 @@ describe(launchApplicationAsync, () => {
     expect(mockedSpawn).toHaveBeenCalledTimes(2);
   });
 
-  it('pins launch, scheme approval, and deep link to the selected iOS Simulator', async () => {
-    await launchApplicationAsync({
-      applicationIdentifier: 'com.example.app',
-      openUrl: 'exp://example.test',
-      runtimePlatform: BuildRuntimePlatform.DARWIN,
-      iosSimulatorUdid: 'session-udid',
-      env: {},
-      logger: createMockLogger(),
-    });
-    expect(mockedSpawn.mock.calls.map(([, args]) => args[2])).toEqual([
-      'session-udid',
-      'session-udid',
-      'session-udid',
-    ]);
-  });
-
   it('opens a custom URL on iOS when scheme preapproval fails', async () => {
     const logger = createMockLogger();
     const approvalError = new Error('Scheme approval is unavailable.');

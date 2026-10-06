@@ -41,6 +41,7 @@ import {
 } from './IosSimulatorRecordingUtils';
 import { SERVE_SIM_STATE_DIR, readServeSimServersAsync } from './serveSimMetricsRecorder';
 import { startLogPhase } from '../../utils/logPhase';
+import { launchServeSimApplicationAsync } from './serveSimAppLauncher';
 
 const WEB_PREVIEW_HOST = '127.0.0.1';
 const SERVE_SIM_PACKAGE_NAME = '@expo/serve-sim';
@@ -282,6 +283,7 @@ export type DeviceWebPreview = {
 
 export type DeviceSessionHost = {
   openPreviewAsync(options: { baseDomain: string }): Promise<DeviceWebPreview>;
+  launchApplicationAsync(options: ServeSimLaunchOptions): Promise<void>;
   /**
    * Terminal and idempotent. Never rejects: a failed finalization, host stop or upload is logged
    * and reported, so callers need no error handling around it.
@@ -446,9 +448,22 @@ async function startDeviceSessionHostInPhaseAsync(
   let previewTask: Promise<DeviceWebPreview> | null = null;
   let finishTask: Promise<void> | null = null;
   let hostReady = false;
+  let simulatorUdid: string | undefined;
   let previewFailed = false;
 
   const host: DeviceSessionHost = {
+    async launchApplicationAsync(options) {
+      if (isAndroid || !simulatorUdid || !previewToken || !hostReady || finishTask) {
+        throw new SystemError('Application launch needs a running iOS session host.');
+      }
+      await launchServeSimApplicationAsync({
+        ...options,
+        udid: simulatorUdid,
+        token: previewToken,
+        port,
+        signal,
+      });
+    },
     openPreviewAsync({ baseDomain }) {
       if (finishTask) {
         return Promise.reject(
@@ -539,6 +554,7 @@ async function startDeviceSessionHostInPhaseAsync(
     }
     hostReady = true;
     if (!isAndroid) {
+      simulatorUdid = device;
       previewToken = await readServeSimPreviewTokenAsync(device);
       if (!previewToken) {
         throw new SystemError(

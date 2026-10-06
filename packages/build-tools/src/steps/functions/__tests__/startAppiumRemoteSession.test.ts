@@ -225,6 +225,7 @@ describe('createStartAppiumRemoteSessionBuildFunction session lifecycle', () => 
       stopAsync: jest.fn(),
     });
     jest.mocked(startDeviceSessionHostAsync).mockResolvedValue({
+      launchApplicationAsync: jest.fn().mockResolvedValue(undefined),
       openPreviewAsync: jest.fn().mockResolvedValue({
         previewPageUrl: 'https://expo.dev/simulator-preview/preview-id',
         apiUrl: 'https://web-preview.tunnel.example.com',

@@ -55,9 +55,15 @@ const sessionEnv = {
 };
 
 type Device = Parameters<typeof runAgentDeviceRemoteSessionAsync>[1]['device'];
+let deviceLaunch: unknown;
 
 function prepareDeviceAsync(device: Device): Promise<unknown> {
-  return 'prepareApplicationAsync' in device ? device.prepareApplicationAsync() : device.ready;
+  return (
+    'prepareApplicationAsync' in device ? device.prepareApplicationAsync() : device.ready
+  ).then(launch => {
+    deviceLaunch = launch;
+    return launch;
+  });
 }
 
 function deferred<T = void>(): {
@@ -124,6 +130,7 @@ function sessionDevice(): Device {
 
 describe(createStartAgentDeviceSessionBuildFunction, () => {
   beforeEach(() => {
+    deviceLaunch = undefined;
     jest.clearAllMocks();
     jest.mocked(spawn).mockResolvedValue({ stdout: '', stderr: '' } as never);
     jest.mocked(readLocalEgressHandoffAsync).mockResolvedValue(null);
@@ -190,16 +197,12 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
     expect(installBuildAsync).toHaveBeenCalledWith(
       expect.objectContaining({ artifactPath: '/tmp/App.app' })
     );
-    expect(launchApplicationAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        applicationIdentifier: 'dev.example.app',
-        launchArgs: ['-flag'],
-        openUrl: 'exp://example.test',
-      })
-    );
-    expect(jest.mocked(installBuildAsync).mock.invocationCallOrder[0]).toBeLessThan(
-      jest.mocked(launchApplicationAsync).mock.invocationCallOrder[0]
-    );
+    expect(launchApplicationAsync).not.toHaveBeenCalled();
+    expect(deviceLaunch).toEqual({
+      launchAppIdentifier: 'dev.example.app',
+      launchArgs: ['-flag'],
+      openUrl: 'exp://example.test',
+    });
   });
 
   it('downloads concurrently and installs on the selected Simulator after host readiness', async () => {
@@ -259,13 +262,12 @@ describe(createStartAgentDeviceSessionBuildFunction, () => {
     expect(installBuildAsync).toHaveBeenCalledWith(
       expect.objectContaining({ artifactPath: '/tmp/App.app', iosSimulatorUdid: 'selected-udid' })
     );
-    expect(launchApplicationAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        iosSimulatorUdid: 'selected-udid',
-        launchArgs: ['-flag'],
-        openUrl: 'exp://example.test',
-      })
-    );
+    expect(launchApplicationAsync).not.toHaveBeenCalled();
+    expect(deviceLaunch).toEqual({
+      launchAppIdentifier: 'dev.example.app',
+      launchArgs: ['-flag'],
+      openUrl: 'exp://example.test',
+    });
   });
 
   it('fails before preparation and installation when boot completion fails', async () => {
