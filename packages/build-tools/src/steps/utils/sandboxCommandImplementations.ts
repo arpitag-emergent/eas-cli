@@ -3,8 +3,12 @@ import {
   type SandboxDaemonCommandResult,
   type SandboxDaemonMethod,
 } from '@expo/eas-build-job';
+import { type bunyan } from '@expo/logger';
+import { type Client } from '@urql/core';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+import { SandboxArtifactUploadManager } from './sandboxArtifacts';
 import { ShellSessionManager } from './shellSessionManager';
 
 const DEFAULT_EXEC_YIELD_TIME_MS = 10_000;
@@ -20,15 +24,32 @@ export function createSandboxCommandImplementations({
   workingDirectory,
   env,
   signal,
+  graphqlClient,
+  sandboxId,
+  logger,
 }: {
   workingDirectory: string;
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
+  graphqlClient: Client;
+  sandboxId: string;
+  logger: bunyan;
 }): {
   commandImplementations: SandboxDaemonCommandImplementations;
   stoppedPromise: Promise<void>;
 } {
   const sessions = new ShellSessionManager({ workingDirectory, env, signal });
+  const artifactUploads = new SandboxArtifactUploadManager({
+    graphqlClient,
+    sandboxId,
+    logger,
+    signal,
+  });
+  const stoppedPromise = Promise.all([
+    sessions.stoppedPromise,
+    artifactUploads.stoppedPromise,
+  ]).then(() => {});
+  stoppedPromise.catch(() => {});
   return {
     commandImplementations: {
       async execCommand(params) {
@@ -55,10 +76,14 @@ export function createSandboxCommandImplementations({
         );
         return { ...result, wallTimeSeconds: (performance.now() - callStartedAt) / 1_000 };
       },
-      async uploadArtifact() {
-        throw new Error('Uploading sandbox artifacts is not supported yet.');
+      async uploadArtifact(params) {
+        const id = await artifactUploads.startAsync({
+          filePath: path.resolve(workingDirectory, params.path),
+          name: params.name,
+        });
+        return { id };
       },
     },
-    stoppedPromise: sessions.stoppedPromise,
+    stoppedPromise,
   };
 }

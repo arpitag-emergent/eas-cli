@@ -4,6 +4,9 @@ jest.unmock('node:fs');
 jest.unmock('node:fs/promises');
 
 import { type SandboxDaemonCommandResult } from '@expo/eas-build-job';
+import { type bunyan } from '@expo/logger';
+import { type Client } from '@urql/core';
+import fetch from 'node-fetch';
 import fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -16,18 +19,31 @@ import {
   createSandboxCommandImplementations,
 } from '../sandboxCommandImplementations';
 
+const { Response } = jest.requireActual('node-fetch') as typeof import('node-fetch');
+
+const ARTIFACT_ID = '0199c0de-7b3a-7c1e-8f00-1234567890ab';
+
 describe('sandbox daemon commands', () => {
   let commandImplementations: SandboxDaemonCommandImplementations;
   let stopAsync: () => Promise<void>;
   let workingDirectory: string;
+  let mutation: jest.Mock;
+  let graphqlClient: Client;
+  let logger: bunyan;
 
   beforeEach(async () => {
     workingDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sandbox-command-executor-'));
+    mutation = jest.fn();
+    graphqlClient = { mutation } as unknown as Client;
+    logger = { info: jest.fn(), error: jest.fn() } as unknown as bunyan;
     const controller = new AbortController();
     const commands = createSandboxCommandImplementations({
       workingDirectory,
       env: process.env,
       signal: controller.signal,
+      graphqlClient,
+      sandboxId: 'sandbox-id',
+      logger,
     });
     commandImplementations = commands.commandImplementations;
     stopAsync = async () => {
@@ -55,6 +71,9 @@ describe('sandbox daemon commands', () => {
       workingDirectory,
       env: process.env,
       signal: controller.signal,
+      graphqlClient,
+      sandboxId: 'sandbox-id',
+      logger,
     });
     const command = commands.commandImplementations.execCommand({ cmd: 'printf should-not-run' });
     controller.abort();
@@ -237,6 +256,52 @@ describe('sandbox daemon commands', () => {
 
     expect(isProcessRunning(childPid)).toBe(false);
   });
+
+  it('rejects a directory with a hint to upload an archive', async () => {
+    await fs.mkdir(path.join(workingDirectory, 'dist'));
+
+    await expect(
+      commandImplementations.uploadArtifact({ path: 'dist', name: 'Build output' })
+    ).rejects.toThrow(
+      `${path.join(workingDirectory, 'dist')} is not a regular file. To upload a directory, create an archive first`
+    );
+    expect(mutation).not.toHaveBeenCalled();
+  });
+
+  it('uploads an artifact from a path relative to the working directory', async () => {
+    await fs.mkdir(path.join(workingDirectory, 'logs'));
+    await fs.writeFile(path.join(workingDirectory, 'logs', 'crash.log'), 'crash');
+    mutation
+      .mockReturnValueOnce({
+        toPromise: async () => ({
+          data: {
+            sandbox: {
+              createArtifactUploadSession: {
+                artifact: { id: ARTIFACT_ID },
+                uploadSession: { url: 'https://uploads.expo.test/artifact', headers: {} },
+              },
+            },
+          },
+        }),
+      })
+      .mockReturnValueOnce({
+        toPromise: async () => ({ data: { sandbox: { finalizeArtifact: { id: ARTIFACT_ID } } } }),
+      });
+    jest.mocked(fetch).mockResolvedValueOnce(new Response('', { status: 200 }));
+
+    const result = await commandImplementations.uploadArtifact({
+      path: 'logs/crash.log',
+      name: 'Crash log',
+    });
+
+    expect(result).toEqual({ id: ARTIFACT_ID });
+    expect(mutation).toHaveBeenCalledWith(
+      expect.anything(),
+      { sandboxId: 'sandbox-id', input: { name: 'Crash log', filename: 'crash.log', size: 5 } },
+      expect.anything()
+    );
+  });
+
   async function readUntilAsync(
     initial: SandboxDaemonCommandResult<'execCommand' | 'writeStdin'>,
     isReady: (
