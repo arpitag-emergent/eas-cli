@@ -3,7 +3,7 @@ jest.unmock('fs/promises');
 jest.unmock('node:fs');
 jest.unmock('node:fs/promises');
 
-import { type SandboxDaemonCommandResult, type SandboxDaemonMethod } from '@expo/eas-build-job';
+import { type SandboxDaemonCommandResult } from '@expo/eas-build-job';
 import fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -238,9 +238,12 @@ describe('sandbox daemon commands', () => {
     expect(isProcessRunning(childPid)).toBe(false);
   });
   async function readUntilAsync(
-    initial: SandboxDaemonCommandResult<SandboxDaemonMethod>,
-    isReady: (output: string, result: SandboxDaemonCommandResult<SandboxDaemonMethod>) => boolean
-  ): Promise<SandboxDaemonCommandResult<SandboxDaemonMethod>> {
+    initial: SandboxDaemonCommandResult<'execCommand' | 'writeStdin'>,
+    isReady: (
+      output: string,
+      result: SandboxDaemonCommandResult<'execCommand' | 'writeStdin'>
+    ) => boolean
+  ): Promise<SandboxDaemonCommandResult<'execCommand' | 'writeStdin'>> {
     let result = initial;
     let output = result.output;
     const deadline = Date.now() + 10_000;

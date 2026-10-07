@@ -55,6 +55,9 @@ export function createSandboxCommandImplementations({
         );
         return { ...result, wallTimeSeconds: (performance.now() - callStartedAt) / 1_000 };
       },
+      async uploadArtifact() {
+        throw new Error('Uploading sandbox artifacts is not supported yet.');
+      },
     },
     stoppedPromise: sessions.stoppedPromise,
   };
